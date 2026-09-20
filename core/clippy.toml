@@ -1,0 +1,5 @@
+# Money is exact decimal (ADR-0021, Q182). Applies to this crate only.
+disallowed-types = [
+    { path = "f32", reason = "money and percentages are rust_decimal::Decimal (Q182)" },
+    { path = "f64", reason = "money and percentages are rust_decimal::Decimal (Q182)" },
+]

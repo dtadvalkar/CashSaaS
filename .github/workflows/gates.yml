@@ -1,0 +1,42 @@
+# The three gates, run by a machine rather than self-reported.
+#
+# A build log records what its author says was done, and self-report is the weakest evidence in it.
+# This is the line beside it that nobody writes: the gates on every push, and the mutation sweep
+# that asks whether a Scenario's green means anything.
+#
+# The toolchain is not named here. `rust-toolchain.toml` pins 1.98.1 with rustfmt and clippy, and
+# rustup installs it on the first cargo call, so the version cannot drift from the one the owner
+# pinned. No dependency cache: `core` depends on chrono and rust_decimal and nothing else, so a
+# cold build costs less than the action that would cache it.
+
+name: gates
+
+on: [push, pull_request]
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  # Every figure in every Scenario section, changed one at a time, with the test re-run. A mutation
+  # the test still passes is an escape: a test that does not test. Separate from the gates so a
+  # compile error is reported in a minute rather than behind a sweep that takes twenty.
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      # Every Family that has a test file and a Scenario document, so a Family is swept the day
+      # its tests land. coverage.rs and harness.rs have no Scenario document and are skipped.
+      - run: |
+          for f in scenarios/tests/*.rs; do
+            fam=$(basename "$f" .rs)
+            if [ -f "docs/scenarios/$fam.md" ]; then python3 tools/mutate.py "$fam"; fi
+          done

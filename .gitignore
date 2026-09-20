@@ -1,0 +1,10 @@
+# Credentials — never commit
+Xero CashSaaS.txt
+.env
+.env.*
+*.local
+**/settings.local.json
+__pycache__/
+
+# Rust
+/target/

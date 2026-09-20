@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = ["core", "scenarios"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98.1"
+publish = false
+license = "AGPL-3.0-only"
+
+# Day-one gates (ADR-0021, Q207). CI and the pre-commit hook run clippy with -D warnings.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+disallowed_types = "deny"
+float_arithmetic = "deny"

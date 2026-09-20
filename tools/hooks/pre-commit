@@ -1,0 +1,20 @@
+#!/bin/sh
+# The three gates, in the order CI runs them, before every commit.
+#
+# The build brief asks for a commit per Scenario with the gates passing at that commit, so an
+# interrupted run loses at most one Scenario. This is what makes that true rather than remembered.
+# It lives here and not in .git/hooks so it is versioned like everything else the build depends on;
+# `git config core.hooksPath tools/hooks` turns it on, once per clone.
+#
+# The mutation sweep is not here: it takes twenty minutes and belongs in CI and in the reviewer's
+# hands, not between the owner and a commit.
+#
+# ponytail: checks the working tree, not the staged index, so a partial commit is not what is
+# tested. Stash-and-restore if a partial commit is ever a real workflow here; today the tree is
+# committed whole.
+
+set -e
+
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace

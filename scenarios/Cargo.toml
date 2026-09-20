@@ -1,0 +1,15 @@
+[package]
+name = "scenarios"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+cashsaas-core = { path = "../core" }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+rust_decimal = { version = "1.43.0", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

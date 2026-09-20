@@ -1,0 +1,16 @@
+[package]
+# Not `core`: a crate by that name shadows Rust's built-in `core` crate.
+name = "cashsaas-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No database, network, async or clock dependency, ever (ADR-0004, ADR-0021).
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+rust_decimal = { version = "1.43.0", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true
