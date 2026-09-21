@@ -22,7 +22,9 @@ use cashsaas_core::forecast::{ForecastRun, Horizon, run_forecast};
 use cashsaas_core::money::{
     Currency, HomeAmount, Money, Quote, TransactionAmount, TransactionPart,
 };
-use cashsaas_core::settings::{AccountClass, CounterpartyClass, ScheduledReceipt, Settings};
+use cashsaas_core::settings::{
+    AccountClass, CounterpartyClass, ScheduledObligation, ScheduledReceipt, Settings,
+};
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 
@@ -220,6 +222,15 @@ impl Scenario {
         self.facts.accounts().values().find(|a| a.name == name)
     }
 
+    /// The account with a name, in one Entity (CASH-S09: two Entities can bank at the same name,
+    /// "RBC Business Chequing").
+    pub fn account_named_in(&self, entity: &str, name: &str) -> Option<&Account> {
+        self.facts
+            .accounts()
+            .values()
+            .find(|a| a.id.entity.0 == entity && a.name == name)
+    }
+
     /// A customer by name, added on first use.
     pub fn customer(&mut self, name: &str) -> FactId {
         self.contact("Customer", name)
@@ -305,6 +316,43 @@ impl Scenario {
     }
 
     /// The closing cash the owner chooses never to fall below (AP-DISC-02, CASH-BUFFER-01).
+    /// The currency the Group consolidates in (CASH-GROUP-01). A Scenario with one Entity never
+    /// consolidates, so only a Group Scenario sets it.
+    pub fn reporting_currency(&mut self, code: &str) -> &mut Self {
+        self.settings.reporting_currency = Some(
+            Currency::new(code).unwrap_or_else(|| panic!("{}: not a currency: {code}", self.name)),
+        );
+        self
+    }
+
+    /// The owner's rate from one currency to another (CASH-GROUP-01, IC-ELIM-01, Q30).
+    pub fn conversion_rate(&mut self, from: &str, to: &str, rate: &str) -> &mut Self {
+        let bad = |code: &str| -> ! { panic!("{}: not a currency: {code}", self.name) };
+        let from = Currency::new(from).unwrap_or_else(|| bad(from));
+        let to = Currency::new(to).unwrap_or_else(|| bad(to));
+        self.settings
+            .conversion_rates
+            .insert((from, to), amount(rate));
+        self
+    }
+
+    /// The day of the month a credit card is paid on (GAP-CARD-01).
+    pub fn card_payment_day(&mut self, account: &str, day: u32) -> &mut Self {
+        let id = self.account(account);
+        self.settings.card_payment_days.insert(id, day);
+        self
+    }
+
+    /// A credit line's limit, named rather than an account added on first use (CASH-HEAD-01): the
+    /// name can be a line no account is mapped to, which is what raises the item to map one.
+    pub fn credit_line_limit(&mut self, name: &str, limit: &str) -> &mut Self {
+        let entity = self.entity_id();
+        self.settings
+            .credit_line_limits
+            .insert((entity, name.to_owned()), HomeAmount(amount(limit)));
+        self
+    }
+
     pub fn cash_buffer(&mut self, total: &str) -> &mut Self {
         let entity = self.entity_id();
         self.settings
@@ -609,6 +657,32 @@ impl Scenario {
         self
     }
 
+    /// An obligation the owner expects that no ledger schedules (GAP-SCHED-01).
+    pub fn scheduled_obligation(
+        &mut self,
+        id: &str,
+        payee: &str,
+        total: &str,
+        every: FrequencyUnit,
+        start: &str,
+        end: Option<&str>,
+    ) -> &mut Self {
+        let payee = self.vendor(payee);
+        let obligation = ScheduledObligation {
+            payee,
+            amount: HomeAmount(amount(total)),
+            frequency: Frequency {
+                unit: every,
+                interval: 1,
+            },
+            start: self.date(start),
+            end: end.map(|on| self.date(on)),
+        };
+        let key = self.id("ScheduledObligation", id);
+        self.settings.scheduled_obligations.insert(key, obligation);
+        self
+    }
+
     /// The scheduled receipt entered under an id (CASH-SCHED-01).
     pub fn scheduled_receipt_named(&self, id: &str) -> Option<&ScheduledReceipt> {
         self.settings
@@ -616,6 +690,15 @@ impl Scenario {
             .iter()
             .find(|(key, _)| key.provider_id == id)
             .map(|(_, receipt)| receipt)
+    }
+
+    /// The scheduled obligation entered under an id (GAP-SCHED-01).
+    pub fn scheduled_obligation_named(&self, id: &str) -> Option<&ScheduledObligation> {
+        self.settings
+            .scheduled_obligations
+            .iter()
+            .find(|(key, _)| key.provider_id == id)
+            .map(|(_, obligation)| obligation)
     }
 
     /// The account line with a provider id, in any Entity.

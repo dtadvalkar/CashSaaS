@@ -11,14 +11,19 @@ use crate::document::balance_at;
 use crate::facts::{Direction, EntityId, FactId, Facts};
 use crate::forecast::{
     Basis, Confidence, ConfidenceShares, DecisionItem, EntityForecast, Evidence, Exclusion,
-    ForecastRun, Horizon, ItemKind, LowPoint, Outcome, Placement, Priority, ProvisionalReason,
-    Role, RuleId, Severity, Stretch, Subject, Week, WeekForecast,
+    ForecastRun, GroupView, GroupWeek, Horizon, ItemKind, LowPoint, Outcome, Placement, Priority,
+    ProvisionalReason, Role, RuleId, Severity, Stretch, Subject, Week, WeekForecast,
 };
-use crate::money::HomeAmount;
+use crate::ic;
+use crate::money::{Currency, HomeAmount, ReportingAmount};
 use crate::schedule::{nearest_occurrence, occurrence};
 use crate::settings::{AccountClass, Classifications, Settings};
 
 const CASH_OPEN_01: RuleId = RuleId("CASH-OPEN-01");
+const CASH_OPEN_02: RuleId = RuleId("CASH-OPEN-02");
+const CASH_OPEN_03: RuleId = RuleId("CASH-OPEN-03");
+const CASH_OPEN_04: RuleId = RuleId("CASH-OPEN-04");
+const CASH_HEAD_01: RuleId = RuleId("CASH-HEAD-01");
 const CASH_WEEK_01: RuleId = RuleId("CASH-WEEK-01");
 const CASH_ROLL_01: RuleId = RuleId("CASH-ROLL-01");
 const CASH_CONF_01: RuleId = RuleId("CASH-CONF-01");
@@ -27,6 +32,8 @@ const CASH_SCHED_01: RuleId = RuleId("CASH-SCHED-01");
 const CASH_SHORT_01: RuleId = RuleId("CASH-SHORT-01");
 const CASH_BUFFER_01: RuleId = RuleId("CASH-BUFFER-01");
 const CASH_ORDER_01: RuleId = RuleId("CASH-ORDER-01");
+const CASH_GROUP_01: RuleId = RuleId("CASH-GROUP-01");
+const CASH_GROUP_02: RuleId = RuleId("CASH-GROUP-02");
 
 /// CASH-OPEN-01: the cash a Forecast Run starts from — the book balance of the Entity's
 /// bank-classed accounts on the run date. Restricted accounts, clearing accounts and credit cards
@@ -59,6 +66,150 @@ fn opening_accounts(
         .filter(|account| balance_at(facts, account, as_of).is_some())
         .cloned()
         .collect()
+}
+
+/// CASH-OPEN-02, 03 and 04: what happens to every account CASH-OPEN-01 leaves out of Opening
+/// Cash. Restricted money is shown, not counted; a clearing balance is a week-1 receipt; a credit
+/// card is never cash, and its balance is the GAP Family's to schedule (GAP-CARD-01).
+fn other_accounts(
+    run: &mut ForecastRun,
+    facts: &Facts,
+    classifications: &Classifications,
+    entity: &EntityId,
+    as_of: chrono::NaiveDate,
+) {
+    for account in classifications.accounts_classed(entity, &AccountClass::Restricted) {
+        let Some(balance) = balance_at(facts, account, as_of) else {
+            continue;
+        };
+        run.placements.push(Placement {
+            subject: Subject::Fact(account.clone()),
+            rule: CASH_OPEN_02,
+            rules: vec![CASH_OPEN_02],
+            outcome: Outcome::Excluded(Exclusion::Restricted),
+            amount: Some(balance),
+            history: None,
+            foreign: None,
+            reductions: Vec::new(),
+            priority: None,
+        });
+    }
+    for account in classifications.accounts_classed(entity, &AccountClass::Clearing) {
+        let Some(balance) = balance_at(facts, account, as_of) else {
+            continue;
+        };
+        run.placements.push(Placement {
+            subject: Subject::Fact(account.clone()),
+            rule: CASH_OPEN_03,
+            rules: vec![CASH_OPEN_03],
+            outcome: Outcome::placed_on(
+                run.horizon,
+                as_of,
+                as_of,
+                Direction::In,
+                Basis::ClearingBalance,
+                Confidence::Firm,
+            ),
+            amount: Some(balance),
+            history: None,
+            foreign: None,
+            reductions: Vec::new(),
+            priority: None,
+        });
+    }
+    for account in classifications.accounts_classed(entity, &AccountClass::CreditCard) {
+        let Some(balance) = balance_at(facts, account, as_of) else {
+            continue;
+        };
+        if balance.0.is_zero() {
+            continue;
+        }
+        run.placements.push(Placement {
+            subject: Subject::Fact(account.clone()),
+            rule: CASH_OPEN_04,
+            rules: vec![CASH_OPEN_04],
+            outcome: Outcome::Excluded(Exclusion::CreditCardBalance),
+            amount: Some(HomeAmount(balance.0.abs())),
+            history: None,
+            foreign: None,
+            reductions: Vec::new(),
+            priority: None,
+        });
+    }
+}
+
+/// CASH-HEAD-01: for each credit line with a limit Setting, Headroom is the limit less the drawn
+/// balance on the run date, shown beside the forecast and never counted in it. A limit set for a
+/// line no account is mapped to raises a Decision Item to map one.
+fn headroom(
+    run: &mut ForecastRun,
+    facts: &Facts,
+    classifications: &Classifications,
+    settings: &Settings,
+    entity: &EntityId,
+) {
+    let as_of = run.as_of;
+    for ((line_entity, name), limit) in &settings.credit_line_limits {
+        if line_entity != entity {
+            continue;
+        }
+        let account = facts
+            .accounts()
+            .values()
+            .find(|a| a.id.entity == *entity && a.name == *name)
+            .filter(|a| classifications.account(&a.id).class == AccountClass::CreditLine);
+        match account {
+            Some(account) => {
+                let drawn =
+                    balance_at(facts, &account.id, as_of).map_or(Decimal::ZERO, |b| b.0.abs());
+                run.placements.push(Placement {
+                    subject: Subject::Fact(account.id.clone()),
+                    rule: CASH_HEAD_01,
+                    rules: vec![CASH_HEAD_01],
+                    outcome: Outcome::Shown,
+                    amount: Some(HomeAmount((limit.0 - drawn).max(Decimal::ZERO))),
+                    history: None,
+                    foreign: None,
+                    reductions: Vec::new(),
+                    priority: None,
+                });
+            }
+            None => {
+                run.decision_items.push(DecisionItem {
+                    kind: ItemKind::MapCreditLineAccount,
+                    subject: Subject::CreditLine {
+                        entity: entity.clone(),
+                        name: name.clone(),
+                    },
+                    rule: CASH_HEAD_01,
+                    acted_on_by: Role::Owner,
+                    severity: Severity::Action,
+                    evidence: None,
+                    draft: None,
+                    due: None,
+                    priority: None,
+                });
+            }
+        }
+    }
+}
+
+/// The Headroom CASH-HEAD-01 has already shown for this Entity, summed: what CASH-SHORT-01 and
+/// CASH-BUFFER-01 name beside a stretch.
+fn entity_headroom(run: &ForecastRun, entity: &EntityId) -> Option<HomeAmount> {
+    let shown: Vec<Decimal> = run
+        .placements
+        .iter()
+        .filter(|p| p.subject.entity() == Some(entity) && matches!(p.outcome, Outcome::Shown))
+        .filter_map(|p| p.amount.map(|a| a.0))
+        .collect();
+    (!shown.is_empty()).then(|| {
+        HomeAmount(
+            shown
+                .iter()
+                .fold(Decimal::ZERO, |sum, v| sum.saturating_add(*v)),
+        )
+    })
 }
 
 /// CASH-ROLL-01: one row per week of the Horizon for one Entity, from its Opening Cash and the
@@ -212,16 +363,17 @@ fn trust_inside(run: &ForecastRun, entity: &EntityId, stretch: &Stretch) -> Vec<
 /// and, with a Minimum Cash Buffer set, one "below buffer" item for weeks at or above zero but
 /// below it — a week below zero belongs to the shortfall item instead. Each item is due on the
 /// first day of its first stretch (the reading CASH-S08 confirms: the due date of the stretch,
-/// not of the Placement that caused it). Headroom is always none until CASH-HEAD-01 arrives at
-/// checkpoint D; no credit line exists in `Settings` yet for it to read.
+/// not of the Placement that caused it). Headroom is CASH-HEAD-01's own Shown Placements for this
+/// Entity, summed; still none for any Scenario built so far, since none combines a shortfall or a
+/// below-buffer week with a mapped credit line.
 fn cash_findings(
     run: &mut ForecastRun,
     entity: &EntityId,
     weeks: &[WeekForecast],
     buffer: Option<HomeAmount>,
 ) {
-    let headroom: Option<HomeAmount> = None;
-    let trust_relevant = run.placements.iter().any(|p| {
+    let headroom = entity_headroom(run, entity);
+    let trust_present = run.placements.iter().any(|p| {
         p.subject.entity() == Some(entity) && p.priority == Some(Priority::GovernmentTrust)
     });
 
@@ -244,7 +396,8 @@ fn cash_findings(
             evidence: Some(Evidence::CashStretches {
                 buffer: None,
                 stretches,
-                trust_relevant,
+                trust_capable: true,
+                trust_present,
                 headroom,
             }),
             draft: None,
@@ -267,7 +420,8 @@ fn cash_findings(
                     buffer: Some(buf),
                     stretches: below_buffer,
                     // CASH-BUFFER-01's own catalogue entry never mentions trust (Q276).
-                    trust_relevant: false,
+                    trust_capable: false,
+                    trust_present: false,
                     headroom,
                 }),
                 draft: None,
@@ -279,7 +433,10 @@ fn cash_findings(
 }
 
 /// The total and the on-or-before-Low-Point-week size of the Placements a Decision Item
-/// concerns, by matching Subject (CASH-ORDER-01).
+/// concerns, by matching Subject (CASH-ORDER-01). The total counts an excluded amount too — a
+/// card excluded for want of a payment day still has a size to rank by — but more than one Rule
+/// can place the same Subject (CASH-OPEN-04 and GAP-CARD-01 both cite a card's own account), and
+/// they always state the same underlying figure, so the largest is taken rather than summed.
 fn item_amounts(
     placements: &[Placement],
     subject: &Subject,
@@ -288,13 +445,12 @@ fn item_amounts(
     let mut total = Decimal::ZERO;
     let mut landing = Decimal::ZERO;
     for p in placements.iter().filter(|p| &p.subject == subject) {
-        let Outcome::Placed { week, .. } = p.outcome else {
-            continue;
-        };
         let Some(amount) = p.amount else { continue };
         let size = amount.0.abs();
-        total = total.saturating_add(size);
-        if low.is_some_and(|low| week <= low) {
+        total = total.max(size);
+        if let Outcome::Placed { week, .. } = p.outcome
+            && low.is_some_and(|low| week <= low)
+        {
             landing = landing.saturating_add(size);
         }
     }
@@ -466,6 +622,188 @@ fn covered_occurrences(
     map
 }
 
+/// CASH-GROUP-01 and CASH-GROUP-02: the Group's weekly totals in its Reporting Currency, and the
+/// Entities left out of them. Each Entity converts at the owner's rate for its own pair, and an
+/// Entity whose Home Currency is the Reporting Currency converts at one. An Entity the owner has
+/// set no rate for is excluded, asked about and makes the run Provisional — never converted at a
+/// guessed rate (ADR-0019, Q64). The total is a label over a sum: it raises no Decision Item of
+/// its own however low it goes, and each Entity's own forecast is untouched by any of this.
+/// Receipts and payments exclude each paired intercompany leg (IC-ELIM-01); `intercompany_difference`
+/// carries what a cross-currency pair leaves behind. Closing stays the sum of the Entities' own
+/// closings, which already carry the full effect of their own leg.
+fn group_view(run: &mut ForecastRun, facts: &Facts, settings: &Settings) -> Option<GroupView> {
+    let reporting = settings.reporting_currency?;
+    let mut rates: Vec<(EntityId, Decimal)> = Vec::new();
+    for (entity, ledger) in facts.ledger_settings() {
+        let home = ledger.home_currency;
+        // The Reporting Currency needs no rate to state itself; every other pair needs the
+        // owner's, and has no default (Q30).
+        let rate = if home == reporting {
+            Some(Decimal::ONE)
+        } else {
+            settings.conversion_rates.get(&(home, reporting)).copied()
+        };
+        match rate {
+            Some(rate) => rates.push((entity.clone(), rate)),
+            None => no_conversion_rate(run, entity, home, reporting),
+        }
+    }
+    let included: Vec<(&EntityForecast, Decimal)> = rates
+        .iter()
+        .filter_map(|(entity, rate)| {
+            Some((run.entities.iter().find(|e| &e.entity == entity)?, *rate))
+        })
+        .collect();
+    let weeks = (0..usize::try_from(run.horizon.weeks).unwrap_or_default())
+        .map(|index| {
+            let week = Week(u32::try_from(index).unwrap_or_default().saturating_add(1));
+            let at = |pick: fn(&WeekForecast) -> HomeAmount| {
+                total(&included, |forecast| Some(pick(forecast.weeks.get(index)?)))
+            };
+            GroupWeek {
+                week,
+                opening: at(|w| w.opening),
+                receipts: external_movement(run, &rates, week, Direction::In),
+                payments: external_movement(run, &rates, week, Direction::Out),
+                intercompany_difference: intercompany_difference(run, &rates, week),
+                closing: at(|w| w.closing),
+            }
+        })
+        .collect();
+    Some(GroupView {
+        currency: reporting,
+        opening: total(&included, |forecast| Some(forecast.opening)),
+        entities: rates.into_iter().map(|(entity, _)| entity).collect(),
+        weeks,
+        rules: vec![CASH_GROUP_01],
+    })
+}
+
+/// One figure of the Group's total: each included Entity's own, converted at that Entity's rate
+/// and then summed. CASH-GROUP-01 sums Entities' cash; it never converts a pooled figure.
+fn total(
+    included: &[(&EntityForecast, Decimal)],
+    pick: impl Fn(&EntityForecast) -> Option<HomeAmount>,
+) -> ReportingAmount {
+    included
+        .iter()
+        .filter_map(|(forecast, rate)| Some(ReportingAmount::convert(pick(forecast)?, *rate)))
+        .fold(ReportingAmount::ZERO, ReportingAmount::saturating_add)
+}
+
+/// The rate an included Entity converts at, or `None` when it is CASH-GROUP-02's exclusion.
+fn rate_of(rates: &[(EntityId, Decimal)], entity: &EntityId) -> Option<Decimal> {
+    rates.iter().find(|(id, _)| id == entity).map(|(_, r)| *r)
+}
+
+/// The Group's receipts or payments for a week, converted and summed across included Entities,
+/// with every Placement paired by IC-DOC-01 left out (IC-ELIM-01: those eliminate instead, into
+/// `intercompany_difference`).
+fn external_movement(
+    run: &ForecastRun,
+    rates: &[(EntityId, Decimal)],
+    week: Week,
+    direction: Direction,
+) -> ReportingAmount {
+    run.placements
+        .iter()
+        .filter(|p| !matches!(p.subject, Subject::Intercompany { .. }))
+        .filter_map(|p| {
+            let Outcome::Placed {
+                week: w,
+                direction: d,
+                ..
+            } = p.outcome
+            else {
+                return None;
+            };
+            if w != week || d != direction {
+                return None;
+            }
+            let entity = p.subject.entity()?;
+            let rate = rate_of(rates, entity)?;
+            Some(ReportingAmount::convert(p.amount?, rate))
+        })
+        .fold(ReportingAmount::ZERO, ReportingAmount::saturating_add)
+}
+
+/// IC-ELIM-01: the part of each intercompany pair placed this week that does not eliminate at the
+/// conversion rate — zero for a same-currency pair, the residual for a cross-currency one. A leg
+/// whose Entity has no conversion rate (CASH-GROUP-02) is left out of the pair entirely, as the
+/// Group total already leaves that Entity out.
+fn intercompany_difference(
+    run: &ForecastRun,
+    rates: &[(EntityId, Decimal)],
+    week: Week,
+) -> ReportingAmount {
+    let mut by_document: std::collections::BTreeMap<&FactId, ReportingAmount> =
+        std::collections::BTreeMap::new();
+    for p in &run.placements {
+        let Subject::Intercompany { entity, document } = &p.subject else {
+            continue;
+        };
+        let Outcome::Placed {
+            week: w, direction, ..
+        } = p.outcome
+        else {
+            continue;
+        };
+        if w != week {
+            continue;
+        }
+        let Some(rate) = rate_of(rates, entity) else {
+            continue;
+        };
+        let Some(amount) = p.amount else { continue };
+        let signed = match direction {
+            Direction::In => ReportingAmount::convert(amount, rate),
+            Direction::Out => ReportingAmount::convert(HomeAmount(-amount.0), rate),
+        };
+        let entry = by_document.entry(document).or_insert(ReportingAmount::ZERO);
+        *entry = entry.saturating_add(signed);
+    }
+    by_document
+        .into_values()
+        .fold(ReportingAmount::ZERO, ReportingAmount::saturating_add)
+}
+
+/// CASH-GROUP-02's three outputs for one Entity: the exclusion, the item asking the owner for the
+/// rate, and the Provisional reason. The item's Subject names the Entity as well as the pair, so
+/// it joins that Entity's queue (Q155) and `is_blocking` matches it to the reason.
+fn no_conversion_rate(run: &mut ForecastRun, entity: &EntityId, home: Currency, to: Currency) {
+    let subject = Subject::Conversion {
+        entity: entity.clone(),
+        from: home,
+        to,
+    };
+    run.placements.push(Placement {
+        subject: Subject::Entity(entity.clone()),
+        rule: CASH_GROUP_02,
+        rules: vec![CASH_GROUP_02],
+        outcome: Outcome::Excluded(Exclusion::NoConversionRate),
+        amount: None,
+        history: None,
+        foreign: None,
+        reductions: Vec::new(),
+        priority: None,
+    });
+    run.decision_items.push(DecisionItem {
+        kind: ItemKind::SetConversionRate,
+        subject: subject.clone(),
+        rule: CASH_GROUP_02,
+        acted_on_by: Role::Owner,
+        severity: Severity::Action,
+        evidence: None,
+        draft: None,
+        due: None,
+        priority: None,
+    });
+    run.provisional.push(ProvisionalReason {
+        rule: CASH_GROUP_02,
+        subject,
+    });
+}
+
 /// The Family, run once after every other Family has placed (CASH-ROLL-01 reads their Placements,
 /// and CASH-GROUP-01 and CASH-ORDER-01 cross Entity boundaries). The Rules that turn this into
 /// Confidence shares, Headroom, a Low Point, cash findings, the queue and the Group view arrive at
@@ -476,6 +814,10 @@ pub fn run(
     settings: &Settings,
     classifications: &Classifications,
 ) {
+    // IC-MAP-01 and IC-DOC-01: cross-Entity, so it runs before any Entity's own roll, on the
+    // Placements every other Family has already made — AR-OPEN-03 and AP-OPEN-03 excluded both
+    // legs of a paired intercompany document, which this replaces with the real pair.
+    ic::run(run, facts, classifications);
     // CASH-WEEK-01: the horizon is per Group and has no general default, so an unset one is asked
     // for once, not once per Entity. With none set no weeks are produced and nothing is bucketed.
     if settings.horizon.is_none() {
@@ -494,6 +836,8 @@ pub fn run(
     for entity in facts.ledger_settings().keys().cloned().collect::<Vec<_>>() {
         let entity = &entity;
         scheduled_receipts(run, facts, settings, classifications, entity);
+        other_accounts(run, facts, classifications, entity, run.as_of);
+        headroom(run, facts, classifications, settings, entity);
         let opening = opening_cash(facts, classifications, entity, run.as_of);
         run.placements.push(Placement {
             subject: Subject::Position {
@@ -532,5 +876,9 @@ pub fn run(
             rules,
         });
     }
+    // IC-FUND-01: needs every Entity's own CASH-ROLL-01 output and CASH-SHORT-01's own findings,
+    // so it runs after the per-Entity loop, not inside it.
+    ic::fund(run, facts, settings);
+    run.group = group_view(run, facts, settings);
     order_queue(run);
 }

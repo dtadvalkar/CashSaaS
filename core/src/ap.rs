@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{Datelike, Days, NaiveDate, Weekday};
-use rust_decimal::{Decimal, RoundingStrategy};
+use rust_decimal::Decimal;
 
 use crate::document::{
     age, balance_at, due_date, foreign, intercompany, last_completed_month, open_home, open_own,
@@ -22,7 +22,7 @@ use crate::forecast::{
     ForecastRun, ItemKind, Outcome, Placement, Priority, ProvisionalReason, Reduction, Role,
     RuleId, Severity, Subject, Week,
 };
-use crate::money::HomeAmount;
+use crate::money::{HomeAmount, round_money};
 use crate::schedule::{due_by, index_at_or_before, nearest_occurrence, occurrence};
 use crate::settings::{AccountClass, Classifications, CounterpartyClass, Settings};
 
@@ -518,7 +518,7 @@ fn discounts(
             .filter(|p| p.rule.family() == "AP" && p.subject == subject(document))
             .find_map(|p| match p.outcome {
                 Outcome::Placed { week, .. } => Some(week_index(week)),
-                Outcome::Stated { .. } | Outcome::Excluded(_) => None,
+                Outcome::Stated { .. } | Outcome::Excluded(_) | Outcome::Shown => None,
             })
         else {
             continue;
@@ -599,11 +599,6 @@ fn week_index(week: Week) -> usize {
     usize::try_from(week.0)
         .unwrap_or_default()
         .saturating_sub(1)
-}
-
-/// To the currency's minor unit, half away from zero (Q182).
-fn round_money(value: Decimal) -> Decimal {
-    value.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
 }
 
 /// AP-DUP-01: two open bills from the same vendor with the same vendor reference, or with the same

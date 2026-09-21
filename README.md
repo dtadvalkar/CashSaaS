@@ -93,7 +93,7 @@ The specification covers six *Families* of Rules. Three have code behind them:
 |---|---|---|---|---|
 | **AR** | Turns open customer documents into expected receipts; raises collection, write-off and unbilled-revenue items | 18 | 11 | Built and tested |
 | **AP** | Turns open bills and committed purchases into expected payments; raises duplicate, discount and ledger-tie items | 19 | 10 | Built and tested |
-| **CASH** | Rolls every Family's expected amounts through the weeks; finds the Low Point; raises shortfall and buffer items; orders the queue; builds the Group view | 16 | 10 | In progress (4 Scenarios tested) |
+| **CASH** | Rolls every Family's expected amounts through the weeks; finds the Low Point; raises shortfall and buffer items; orders the queue; builds the Group view | 16 | 10 | Built; 9 of 10 Scenarios tested (the tenth needs a GAP Rule) |
 | **GAP** | Payroll, tax remittances, loans, leases, rent and subscriptions paid without a bill, card balances | 14 | 9 | Specified; 2 Rules built early |
 | **IC** | Cash between businesses in the same Group; pairing and eliminating both sides; who could fund whom | 10 | 7 | Specified; 4 Rules built early |
 | **CLOSE** | Whether the books are fit to forecast from: reconciliations, suspense accounts, period lock | 10 | 7 | Specified |

@@ -19,9 +19,7 @@ use scenarios::tables::{is_rule_id, section, tables};
 /// (ADR-0021, Q213). CASH is the first Family to break it: **CASH-S03 stays here past the CASH
 /// done-line**, because it needs GAP-TAX-01 and Q275 leaves that Rule to the GAP build, which
 /// builds CASH-S03 alongside GAP-S06 and GAP-S07. The rest go as the CASH build reaches them.
-const PENDING: &[&str] = &[
-    "CASH-S01", "CASH-S02", "CASH-S03", "CASH-S07", "CASH-S09", "CASH-S10",
-];
+const PENDING: &[&str] = &["CASH-S03"];
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

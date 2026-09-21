@@ -1,11 +1,11 @@
 //! Document arithmetic with no side in it: what a document is worth, when, and to whom (ADR-0022).
 
 use chrono::{Datelike, NaiveDate};
-use rust_decimal::{Decimal, RoundingStrategy};
+use rust_decimal::Decimal;
 
 use crate::facts::{ApplicationFrom, Document, DocumentKind, FactId, Facts};
 use crate::forecast::ForeignAmount;
-use crate::money::{HomeAmount, Quote};
+use crate::money::{HomeAmount, Quote, round_money};
 use crate::settings::{Classifications, CounterpartyClass};
 
 /// Days after the due date, negative before it.
@@ -50,12 +50,7 @@ pub fn to_home(document: &Document, own: Decimal) -> HomeAmount {
         Quote::HomePerUnit => own.checked_mul(part.rate),
         Quote::UnitsPerHome => own.checked_div(part.rate),
     };
-    // ponytail: minor unit fixed at 2; Reference Data when a Scenario needs another (Q182).
-    HomeAmount(
-        converted
-            .unwrap_or(document.total.home.0)
-            .round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero),
-    )
+    HomeAmount(round_money(converted.unwrap_or(document.total.home.0)))
 }
 
 /// The open amount as of a date in Home Currency (AR-OPEN-01).

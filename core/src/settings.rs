@@ -4,10 +4,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Weekday;
+use rust_decimal::Decimal;
 
 use crate::facts::{EntityId, FactId, Facts, Frequency};
 use crate::forecast::Horizon;
-use crate::money::HomeAmount;
+use crate::money::{Currency, HomeAmount};
 use chrono::NaiveDate;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,6 +22,12 @@ pub enum AccountClass {
     /// Cash the Entity can spend (CASH-OPEN-01); card and bank spends are read by AP-PAID-01.
     Bank,
     CreditCard,
+    /// Trust, escrow or a security deposit: shown, not counted (CASH-OPEN-02).
+    Restricted,
+    /// Undeposited receipts, placed in week 1 rather than counted as cash on hand (CASH-OPEN-03).
+    Clearing,
+    /// A line of credit: undrawn is Headroom, drawn is a Gap (CASH-HEAD-01).
+    CreditLine,
     Unclassified,
 }
 
@@ -62,6 +69,17 @@ pub struct ScheduledReceipt {
     pub end: Option<NaiveDate>,
 }
 
+/// An owner-entered obligation no ledger schedules (GAP-SCHED-01): a loan, lease, rent,
+/// insurance, subscription or owner-level tax the Entity funds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledObligation {
+    pub payee: FactId,
+    pub amount: HomeAmount,
+    pub frequency: Frequency,
+    pub start: NaiveDate,
+    pub end: Option<NaiveDate>,
+}
+
 /// Tenant-owned values that change what the engine computes. Versioning is M2 persistence.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
@@ -84,6 +102,21 @@ pub struct Settings {
     /// Receipts the owner expects that no ledger holds (CASH-SCHED-01), by the id they are
     /// entered under, which is what an occurrence is named by.
     pub scheduled_receipts: BTreeMap<FactId, ScheduledReceipt>,
+    /// The currency the Group consolidates in (CASH-GROUP-01), per Group; optional, because no
+    /// Rule asks for one and a Group of one Entity never consolidates (Q277).
+    pub reporting_currency: Option<Currency>,
+    /// The owner's rate from one currency to another — their current belief, never a market fact
+    /// (`CONTEXT.md`, Q30). No default: a pair with no rate is CASH-GROUP-02's exclusion.
+    pub conversion_rates: BTreeMap<(Currency, Currency), Decimal>,
+    /// The day of the month a credit card is paid on (GAP-CARD-01), by the card's account; no
+    /// default, since neither ledger holds a statement date.
+    pub card_payment_days: BTreeMap<FactId, u32>,
+    /// A credit line's limit (CASH-HEAD-01), named rather than keyed by account: the Setting can
+    /// name a line before any account is mapped to it, which is what raises the item to map one.
+    pub credit_line_limits: BTreeMap<(EntityId, String), HomeAmount>,
+    /// Obligations the owner enters that no ledger schedules (GAP-SCHED-01), by the id they are
+    /// entered under, as `scheduled_receipts` is.
+    pub scheduled_obligations: BTreeMap<FactId, ScheduledObligation>,
 }
 
 /// Every account's and counterparty's Classification, computed before the Rules run.

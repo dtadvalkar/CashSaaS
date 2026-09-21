@@ -6,6 +6,8 @@ pub mod cash;
 pub mod document;
 pub mod facts;
 pub mod forecast;
+pub mod gap;
+pub mod ic;
 pub mod money;
 pub mod schedule;
 pub mod settings;

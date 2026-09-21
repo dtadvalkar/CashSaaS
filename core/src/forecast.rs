@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use rust_decimal::Decimal;
 
 use crate::facts::{Direction, EntityId, FactId, Facts};
-use crate::money::{Currency, HomeAmount};
+use crate::money::{Currency, HomeAmount, ReportingAmount};
 use crate::settings::{Settings, classify};
 
 /// A catalogue Rule ID (ADR-0009): the evidence vocabulary every output cites.
@@ -74,6 +74,14 @@ pub enum Basis {
     PurchaseOrder,
     /// An owner-entered expected receipt (CASH-SCHED-01).
     ScheduledReceipt,
+    /// An owner-entered scheduled obligation (GAP-SCHED-01).
+    ScheduledObligation,
+    /// A credit card's run-date balance, paid on its payment day (GAP-CARD-01).
+    CardBalance,
+    /// A clearing account's run-date balance, placed in week 1 (CASH-OPEN-03).
+    ClearingBalance,
+    /// An intercompany invoice or bill, timed on the paying Entity's own dates (IC-DOC-01).
+    IntercompanyDocument,
 }
 
 /// Why a Placement has no bucket.
@@ -90,6 +98,15 @@ pub enum Exclusion {
     CreditBalance,
     CommittedPurchaseTimingUnknown,
     VendorCreditBalance,
+    /// The Entity's Home Currency is not the Reporting Currency and the owner has set no rate
+    /// for the pair, so it is left out of the Group totals (CASH-GROUP-02).
+    NoConversionRate,
+    /// A bank account the Entity maps as restricted (CASH-OPEN-02).
+    Restricted,
+    /// A credit card account, never cash however a ledger types it (CASH-OPEN-04).
+    CreditCardBalance,
+    /// A credit card with no payment day Setting (GAP-CARD-01).
+    NoCardPaymentDay,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,6 +129,10 @@ pub enum Outcome {
         confidence: Confidence,
     },
     Excluded(Exclusion),
+    /// Shown beside the forecast, never counted in it (`CONTEXT.md`, Headroom): CASH-HEAD-01's
+    /// undrawn credit. It has no week and rolls into nothing, the same way `Stated` and `Excluded`
+    /// don't.
+    Shown,
 }
 
 impl Outcome {
@@ -189,10 +210,31 @@ pub enum Subject {
     /// The Group itself, which is what CASH-WEEK-01's horizon is set for. The only Subject with
     /// no Entity behind it.
     Group,
+    /// The currency pair one Entity needs a rate for (CASH-GROUP-02). It names the Entity,
+    /// because a Group finding joins the queue of the Entity it concerns (Q155).
+    Conversion {
+        entity: EntityId,
+        from: Currency,
+        to: Currency,
+    },
     /// An Entity's own cash position, not any one account or document (CASH-SHORT-01,
     /// CASH-BUFFER-01): the finding is about the whole roll-forward, not a citation of what fed
     /// it, which is `Position`'s own meaning (CASH-OPEN-01).
     Entity(EntityId),
+    /// A credit line named by a Setting but not yet mapped to an account (CASH-HEAD-01): the
+    /// Entity whose queue the item joins, and the name the owner gave it.
+    CreditLine {
+        entity: EntityId,
+        name: String,
+    },
+    /// One Entity's own leg of a paired intercompany Placement (IC-DOC-01): the Entity this leg
+    /// belongs to, and the receivable document both legs are named by, so a reader sees they are
+    /// the same transaction (CASH-S09) — even the paying Entity's own leg, whose amount comes
+    /// from its own booking, not this one. IC-ELIM-01 groups by `document` to find the pair.
+    Intercompany {
+        entity: EntityId,
+        document: FactId,
+    },
 }
 
 impl Subject {
@@ -203,7 +245,11 @@ impl Subject {
             | Self::Occurrence { template: id, .. }
             | Self::AccountMonth { account: id, .. }
             | Self::Pair(id, _) => Some(&id.entity),
-            Self::Position { entity, .. } | Self::Entity(entity) => Some(entity),
+            Self::Position { entity, .. }
+            | Self::Entity(entity)
+            | Self::Conversion { entity, .. }
+            | Self::CreditLine { entity, .. }
+            | Self::Intercompany { entity, .. } => Some(entity),
             Self::Group => None,
         }
     }
@@ -264,6 +310,13 @@ pub enum ItemKind {
     SetHorizon,
     CashShortfall,
     BelowBuffer,
+    SetConversionRate,
+    /// GAP-CARD-01: no payment day set for a credit card.
+    SetCardPaymentDay,
+    /// CASH-HEAD-01: a credit line limit Setting names an account nothing maps.
+    MapCreditLineAccount,
+    /// IC-FUND-01: a connected Entity could cover another's shortfall.
+    ConsiderIntercompanyFunding,
 }
 
 /// The role that usually acts on a Decision Item (ADR-0020).
@@ -309,14 +362,19 @@ pub enum Evidence {
     /// A spend that looks like this bill already paid (AP-PAID-01).
     MaybePaid,
     /// CASH-SHORT-01's and CASH-BUFFER-01's evidence: every continuous stretch, the Entity's
-    /// buffer when the finding is CASH-BUFFER-01's, and the Headroom available. `trust_relevant`
-    /// governs whether a stretch's trust obligations are named at all (Q276): CASH-SHORT-01 does
-    /// so only when the Entity carries a government-trust obligation somewhere in the run, and
-    /// CASH-BUFFER-01 never does, since its own catalogue entry never mentions trust.
+    /// buffer when the finding is CASH-BUFFER-01's, and the Headroom available. `trust_capable` is
+    /// false for CASH-BUFFER-01 always, since its own catalogue entry never mentions trust (Q276).
+    /// For CASH-SHORT-01, whether a stretch's trust status is named at all is Q279's reading:
+    /// whenever the Entity carries a government-trust obligation somewhere in the run
+    /// (`trust_present`), which is when "inside" is added to a stretch with none, or whenever any
+    /// stretch runs more than one week or there is more than one of them — a sentence naming only
+    /// a single one-week stretch and nothing else stays short (CASH-S04); one spanning to the end
+    /// of the horizon says so even with no trust anywhere to name (CASH-S09).
     CashStretches {
         buffer: Option<HomeAmount>,
         stretches: Vec<Stretch>,
-        trust_relevant: bool,
+        trust_capable: bool,
+        trust_present: bool,
         headroom: Option<HomeAmount>,
     },
 }
@@ -428,6 +486,36 @@ pub struct EntityForecast {
     pub rules: Vec<RuleId>,
 }
 
+/// One week of the Group's totals, in its Reporting Currency (CASH-GROUP-01). Each figure is the
+/// sum of the included Entities' own, converted at the owner's rate for that Entity's pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupWeek {
+    pub week: Week,
+    pub opening: ReportingAmount,
+    /// Excludes each paired intercompany leg (IC-ELIM-01): `intercompany_difference` carries what
+    /// a cross-currency pair leaves behind instead.
+    pub receipts: ReportingAmount,
+    pub payments: ReportingAmount,
+    /// The part of a cross-currency intercompany pair that does not eliminate (IC-ELIM-01), zero
+    /// for a same-currency pair or a week with no intercompany Placement.
+    pub intercompany_difference: ReportingAmount,
+    pub closing: ReportingAmount,
+}
+
+/// CASH-GROUP-01's Group view: a labelled total of separate Entities' cash, which never means
+/// cash can move between them (Q87), and which raises no Decision Item of its own however low it
+/// goes. An Entity with no rate is not in `entities` and is CASH-GROUP-02's exclusion instead.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupView {
+    pub currency: Currency,
+    /// The Entities the total covers, in the order the run holds them.
+    pub entities: Vec<EntityId>,
+    pub opening: ReportingAmount,
+    pub weeks: Vec<GroupWeek>,
+    /// The Rules that produced it, as `EntityForecast` carries its own.
+    pub rules: Vec<RuleId>,
+}
+
 /// One reproducible execution over fixed facts and Settings. The Horizon is one of those Settings
 /// (CASH-WEEK-01), and is zero weeks when the Group has set none.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -439,6 +527,8 @@ pub struct ForecastRun {
     pub provisional: Vec<ProvisionalReason>,
     /// One per Entity, in the order the Entities are held.
     pub entities: Vec<EntityForecast>,
+    /// `None` when the Group has set no Reporting Currency, which no Rule asks it to (Q277).
+    pub group: Option<GroupView>,
 }
 
 impl ForecastRun {
@@ -457,6 +547,7 @@ pub fn run_forecast(facts: &Facts, settings: &Settings, as_of: NaiveDate) -> For
         decision_items: Vec::new(),
         provisional: Vec::new(),
         entities: Vec::new(),
+        group: None,
     };
     // With no horizon there is no week to place into, so no Family Rule runs (CASH-WEEK-01).
     // Excluding every document as "beyond horizon" would state a reason that is not the reason.
@@ -464,6 +555,7 @@ pub fn run_forecast(facts: &Facts, settings: &Settings, as_of: NaiveDate) -> For
         for entity in facts.ledger_settings().keys() {
             crate::ar::run(&mut run, facts, settings, &classifications, entity);
             crate::ap::run(&mut run, facts, settings, &classifications, entity);
+            crate::gap::run(&mut run, facts, settings, &classifications, entity);
         }
     }
     // Once, after the loop: CASH reads what every other Family placed, and CASH-GROUP-01 and

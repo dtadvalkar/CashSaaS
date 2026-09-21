@@ -1,6 +1,6 @@
 //! The `Money` shape every monetary field uses (`docs/facts.md`, Money).
 
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, RoundingStrategy};
 
 /// An ISO 4217 code: three uppercase ASCII letters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -77,5 +77,43 @@ impl Money {
                 .transaction
                 .as_ref()
                 .is_some_and(|t| t.amount.0 < Decimal::ZERO)
+    }
+}
+
+/// To the currency's minor unit, half away from zero (Q182). One statement of the rounding rule
+/// for every conversion: a document's own currency to Home (`document::to_home`), a discount
+/// fraction (AP-DISC-02), and a Home amount to the Group's Reporting Currency (Q273).
+// ponytail: minor unit fixed at 2; Reference Data when a Scenario needs another (Q182).
+pub fn round_money(value: Decimal) -> Decimal {
+    value.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+}
+
+/// An amount in the Group's Reporting Currency (CASH-GROUP-01). The field is private and the only
+/// constructor takes a `HomeAmount` and the owner's rate (Q273), so a Group total cannot be
+/// produced without a rate lookup and a missing rate is CASH-GROUP-02's exclusion by construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReportingAmount(Decimal);
+
+impl ReportingAmount {
+    /// Zero, the one amount that is itself in every currency and so needs no rate. It is what a
+    /// sum of Reporting amounts starts from, not a way around `convert` (Q273).
+    pub const ZERO: Self = Self(Decimal::ZERO);
+
+    /// Converts once and rounds once, at the rate the owner set for the pair — their current
+    /// belief, not a market fact (`CONTEXT.md`, Q30). An Entity whose Home Currency is the
+    /// Reporting Currency converts at one.
+    pub fn convert(home: HomeAmount, rate: Decimal) -> Self {
+        // As `document::to_home` does, an unrepresentable product falls back to the unconverted
+        // figure rather than to zero: `core` never panics on data and never invents one.
+        Self(round_money(home.0.checked_mul(rate).unwrap_or(home.0)))
+    }
+
+    /// Two amounts already in the Reporting Currency, which is the only sum this type allows.
+    pub fn saturating_add(self, other: Self) -> Self {
+        Self(self.0.saturating_add(other.0))
+    }
+
+    pub fn amount(self) -> Decimal {
+        self.0
     }
 }

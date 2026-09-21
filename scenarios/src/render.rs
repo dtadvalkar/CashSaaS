@@ -3,13 +3,15 @@
 
 use std::collections::BTreeSet;
 
+use cashsaas_core::facts::EntityId;
 use cashsaas_core::facts::{
     Direction, Document, DocumentKind, DueRule, FactId, FrequencyUnit, PaymentTerms,
     PurchaseOrderStatus, Side, TemplateMode,
 };
 use cashsaas_core::forecast::{
     Basis, Confidence, DecisionItem, DraftCorrection, DuplicateMatch, Evidence, Exclusion,
-    ForecastRun, ItemKind, Outcome, Placement, Priority, Role, Severity, Stretch, Subject, Week,
+    ForecastRun, GroupView, ItemKind, Outcome, Placement, Priority, Role, Severity, Stretch,
+    Subject, Week,
 };
 use cashsaas_core::money::HomeAmount;
 use cashsaas_core::settings::{AccountClass, classify};
@@ -124,7 +126,14 @@ fn subject(scenario: &Scenario, subject: &Subject) -> String {
             .collect::<Vec<_>>()
             .join(", "),
         Subject::Group => "Group".to_owned(),
+        // The pair, as the document writes it: `USD to CAD`. The Entity it names is the queue it
+        // joins (Q155), not part of what the item is about.
+        Subject::Conversion { from, to, .. } => format!("{} to {}", from.code(), to.code()),
         Subject::Entity(id) => id.0.clone(),
+        Subject::CreditLine { name, .. } => name.clone(),
+        // Both legs of a pair cite the receivable, so a reader sees they are the same
+        // transaction (CASH-S09), whichever Entity's own leg this Placement is.
+        Subject::Intercompany { document, .. } => number(scenario, document),
     }
 }
 
@@ -173,6 +182,7 @@ fn covering(scenario: &Scenario, id: &FactId) -> String {
 fn basis(scenario: &Scenario, placement: &Placement, as_of: NaiveDate) -> String {
     match &placement.outcome {
         Outcome::Stated { .. } => format!("book balance at {}", date(scenario, as_of)),
+        Outcome::Shown => NONE.to_owned(),
         Outcome::Placed { basis, .. } => match basis {
             Basis::DueDate => "due date",
             Basis::ExpectedDate => "expected date",
@@ -185,6 +195,10 @@ fn basis(scenario: &Scenario, placement: &Placement, as_of: NaiveDate) -> String
             Basis::ScheduledBill => "scheduled bill",
             Basis::PurchaseOrder => "purchase order",
             Basis::ScheduledReceipt => "scheduled receipt",
+            Basis::ScheduledObligation => "scheduled obligation",
+            Basis::CardBalance => "card balance",
+            Basis::ClearingBalance => "clearing balance",
+            Basis::IntercompanyDocument => "intercompany document",
         }
         .to_owned(),
         Outcome::Excluded(reason) => match reason {
@@ -201,13 +215,17 @@ fn basis(scenario: &Scenario, placement: &Placement, as_of: NaiveDate) -> String
                 "committed purchase, timing unknown".to_owned()
             }
             Exclusion::VendorCreditBalance => "vendor credit balance".to_owned(),
+            Exclusion::NoConversionRate => "no conversion rate".to_owned(),
+            Exclusion::Restricted => "restricted".to_owned(),
+            Exclusion::CreditCardBalance => "credit card, see GAP".to_owned(),
+            Exclusion::NoCardPaymentDay => "no payment day".to_owned(),
         },
     }
 }
 
 fn week(scenario: &Scenario, placement: &Placement) -> String {
     match &placement.outcome {
-        Outcome::Stated { .. } => NONE.to_owned(),
+        Outcome::Stated { .. } | Outcome::Shown => NONE.to_owned(),
         Outcome::Placed {
             week,
             date: on,
@@ -279,13 +297,24 @@ fn placement_cell(
             Outcome::Stated { .. } => "Position",
             Outcome::Placed { .. } => "Placement",
             Outcome::Excluded(_) => "Exclusion",
+            Outcome::Shown => "Headroom",
         }
         .to_owned(),
         "Invoice" | "Bill" | "Item" | "Placement" => subject(scenario, &placement.subject),
+        "Entity" => placement
+            .subject
+            .entity()
+            .map_or(NONE.to_owned(), |e| e.0.clone()),
         "Week" => week(scenario, placement),
         "Priority mark" => priority(placement.priority),
         "Amount" | "Amount (CAD)" => placement_amount(scenario, placement),
-        "Basis / reason" | "Basis" | "Reason" => basis(scenario, placement, as_of),
+        "Basis / reason" | "Basis" => basis(scenario, placement, as_of),
+        // Narrower than "Basis / reason": a column named just "Reason" states why a row is an
+        // exclusion and nothing else (CASH-S07's Opening Cash row is "—", not its book balance).
+        "Reason" => match placement.outcome {
+            Outcome::Excluded(_) => basis(scenario, placement, as_of),
+            _ => NONE.to_owned(),
+        },
         "Confidence" => match placement.outcome {
             Outcome::Placed {
                 confidence: Confidence::Firm,
@@ -301,7 +330,7 @@ fn placement_cell(
             | Outcome::Stated {
                 confidence: Confidence::Estimated,
             } => "estimated",
-            Outcome::Excluded(_) => NONE,
+            Outcome::Excluded(_) | Outcome::Shown => NONE,
         }
         .to_owned(),
         "Median" => placement
@@ -394,6 +423,10 @@ fn item_cell(scenario: &Scenario, item: &DecisionItem, header: &str) -> String {
                 ItemKind::SetHorizon => "set horizon",
                 ItemKind::CashShortfall => "cash shortfall",
                 ItemKind::BelowBuffer => "below buffer",
+                ItemKind::SetConversionRate => "set conversion rate",
+                ItemKind::SetCardPaymentDay => "set card payment day",
+                ItemKind::MapCreditLineAccount => "map credit line account",
+                ItemKind::ConsiderIntercompanyFunding => "consider intercompany funding",
             };
             match item.evidence {
                 Some(Evidence::ExpectedDatePassed(on)) => {
@@ -415,6 +448,12 @@ fn item_cell(scenario: &Scenario, item: &DecisionItem, header: &str) -> String {
             ),
             other => subject(scenario, other),
         },
+        // The queue is per Entity (Q155), so a multi-Entity Scenario heads each row with the
+        // Entity whose queue it is.
+        "Entity" => item
+            .subject
+            .entity()
+            .map_or(NONE.to_owned(), |entity| entity.0.clone()),
         "Class" => match item.severity {
             Severity::Critical => "critical",
             Severity::Blocking => "blocking",
@@ -491,9 +530,17 @@ fn item_cell(scenario: &Scenario, item: &DecisionItem, header: &str) -> String {
             Some(Evidence::CashStretches {
                 buffer,
                 stretches,
-                trust_relevant,
+                trust_capable,
+                trust_present,
                 headroom,
-            }) => cash_stretches(scenario, *buffer, stretches, *trust_relevant, *headroom),
+            }) => cash_stretches(
+                scenario,
+                *buffer,
+                stretches,
+                *trust_capable,
+                *trust_present,
+                *headroom,
+            ),
             None => NONE.to_owned(),
         },
         // A mark on an item is what AP-PRIORITY-01 produced, so the item cites it beside the Rule
@@ -537,7 +584,13 @@ fn terms(terms: &PaymentTerms) -> String {
 /// `None` means no renderer derives this column, or the key names no document: either way the
 /// caller marks the cell unrendered rather than copying the document's own, so a fact the run
 /// does not hold cannot pass by being compared with itself.
-fn fact_cell(scenario: &Scenario, run: &ForecastRun, key: &str, header: &str) -> Option<String> {
+fn fact_cell(
+    scenario: &Scenario,
+    run: &ForecastRun,
+    key: &str,
+    header: &str,
+    entity: Option<&str>,
+) -> Option<String> {
     let facts = scenario.facts();
     let document: Option<&Document> = scenario.document_numbered(key);
     let payment = scenario.payment(key);
@@ -545,7 +598,10 @@ fn fact_cell(scenario: &Scenario, run: &ForecastRun, key: &str, header: &str) ->
     let order = scenario.purchase_order_numbered(key);
     let line = scenario.account_line(key);
     let scheduled = scenario.scheduled_receipt_named(key);
-    let account = scenario.account_named(key);
+    let obligation = scenario.scheduled_obligation_named(key);
+    let account = entity
+        .and_then(|e| scenario.account_named_in(e, key))
+        .or_else(|| scenario.account_named(key));
     let balance = account.and_then(|a| {
         facts
             .account_balances()
@@ -560,7 +616,8 @@ fn fact_cell(scenario: &Scenario, run: &ForecastRun, key: &str, header: &str) ->
         .or(template.map(|t| &t.counterparty))
         .or(order.map(|o| &o.vendor))
         .or_else(|| line.and_then(|l| l.counterparty.as_ref()))
-        .or(scheduled.map(|r| &r.payer));
+        .or(scheduled.map(|r| &r.payer))
+        .or(obligation.map(|o| &o.payee));
     let dated = document
         .map(|d| d.date)
         .or(payment.map(|p| p.date))
@@ -627,9 +684,37 @@ fn fact_cell(scenario: &Scenario, run: &ForecastRun, key: &str, header: &str) ->
             AccountClass::ApControl => "AP control",
             AccountClass::Bank => "bank",
             AccountClass::CreditCard => "credit card",
+            AccountClass::Restricted => "restricted",
+            AccountClass::Clearing => "clearing",
+            AccountClass::CreditLine => "credit line",
             AccountClass::Unclassified => "unclassified",
         }
         .to_owned(),
+        // A multi-Entity facts table names the Entity a row belongs to, and its Home Currency,
+        // which is the Entity's own Setting rather than anything about the account or document.
+        "Entity" => document
+            .map(|d| &d.id.entity)
+            .or(account.map(|a| &a.id.entity))?
+            .0
+            .clone(),
+        "Home Currency" => facts
+            .ledger_settings()
+            .get(
+                document
+                    .map(|d| &d.id.entity)
+                    .or(account.map(|a| &a.id.entity))?,
+            )?
+            .home_currency
+            .code()
+            .to_owned(),
+        "Limit" => amount(
+            scenario
+                .settings()
+                .credit_line_limits
+                .iter()
+                .find(|((_, name), _)| name == key)
+                .map(|(_, limit)| limit.0)?,
+        ),
         "As of" => date(scenario, balance?.as_of),
         "Balance" => amount(balance?.amount.home.0),
         "Kind" => match (payment, document) {
@@ -661,12 +746,14 @@ fn fact_cell(scenario: &Scenario, run: &ForecastRun, key: &str, header: &str) ->
             template
                 .map(|t| t.amount.home.0)
                 .or_else(|| scheduled.map(|r| r.amount.0))
+                .or_else(|| obligation.map(|o| o.amount.0))
                 .or_else(|| line.map(|l| l.amount.home.0.abs()))?,
         ),
         "Every" => {
             let f = template
                 .map(|t| t.frequency)
-                .or(scheduled.map(|r| r.frequency))?;
+                .or(scheduled.map(|r| r.frequency))
+                .or(obligation.map(|o| o.frequency))?;
             let unit = match f.unit {
                 FrequencyUnit::Day => "day",
                 FrequencyUnit::Week => "week",
@@ -681,7 +768,10 @@ fn fact_cell(scenario: &Scenario, run: &ForecastRun, key: &str, header: &str) ->
         }
         "Starting" => date(
             scenario,
-            template.map(|t| t.start).or(scheduled.map(|r| r.start))?,
+            template
+                .map(|t| t.start)
+                .or(scheduled.map(|r| r.start))
+                .or(obligation.map(|o| o.start))?,
         ),
         "Due rule" => due_rule(template?.due_rule, template?.side),
         "Currency" => document?
@@ -754,9 +844,27 @@ fn fact_cell(scenario: &Scenario, run: &ForecastRun, key: &str, header: &str) ->
     Some(cell)
 }
 
+/// What a facts table's row is about, which is its first cell — unless that names the Entity and
+/// an `Account` column names the account the row states a balance for (CASH-S09, CASH-S10).
+fn row_key(table: &Table, row: &[String]) -> String {
+    let account = table
+        .column("Account")
+        .filter(|_| table.headers.first().is_some_and(|h| h == "Entity"));
+    match account.and_then(|column| row.get(column)) {
+        Some(cell) => cell.clone(),
+        None => row.first().cloned().unwrap_or_default(),
+    }
+}
+
 fn how_placements(header: &str) -> Match {
     match header {
-        "Week" | "Amount" | "Amount (CAD)" | "Comparable" => Match::Loose,
+        "Week"
+        | "Amount"
+        | "Amount (CAD)"
+        | "Amount (Home Currency)"
+        | "Comparable"
+        | "Detail"
+        | "Entity" => Match::Loose,
         "Rules" => Match::Rules,
         _ => Match::Exact,
     }
@@ -765,6 +873,9 @@ fn how_placements(header: &str) -> Match {
 fn how_items(header: &str) -> Match {
     match header {
         "Rules" => Match::Rules,
+        // The documents name an Entity in a table by its short name — `Cascade` for Cascade
+        // Garden Supply Inc. — where every other cell is the run's own words.
+        "Entity" => Match::Loose,
         _ => Match::Exact,
     }
 }
@@ -794,6 +905,11 @@ fn render_placements(scenario: &Scenario, run: &ForecastRun, headers: &[String])
 /// rather than by its first header.
 fn render_other_families(scenario: &Scenario, run: &ForecastRun, headers: &[String]) -> Table {
     let family = scenario.name.split('-').next().unwrap_or_default();
+    // A table with no Basis/reason column of its own has nowhere else to say why a row is an
+    // exclusion, so the Item cell says it (CASH-S07): `INV-7102, no timing evidence`.
+    let has_reason = headers
+        .iter()
+        .any(|h| h == "Basis / reason" || h == "Basis" || h == "Reason");
     Table {
         headers: headers.to_vec(),
         rows: run
@@ -807,7 +923,19 @@ fn render_other_families(scenario: &Scenario, run: &ForecastRun, headers: &[Stri
                         // A Placement's own amount is a magnitude; CASH-ROLL-01's direction is
                         // what this table previews, so the sign here is the direction's, not
                         // whatever sign the source amount happened to carry.
-                        "Amount" | "Amount (CAD)" => signed_amount(p),
+                        "Amount" | "Amount (CAD)" | "Amount (Home Currency)" => {
+                            signed_amount(scenario, p)
+                        }
+                        "Pair" => pair_label(run, p),
+                        "Item" | "Invoice" | "Bill" | "Placement" if !has_reason => {
+                            let subject = subject(scenario, &p.subject);
+                            match &p.outcome {
+                                Outcome::Excluded(_) => {
+                                    format!("{subject}, {}", basis(scenario, p, run.as_of))
+                                }
+                                _ => subject,
+                            }
+                        }
                         other => placement_cell(scenario, p, other, run.as_of),
                     })
                     .collect()
@@ -816,21 +944,60 @@ fn render_other_families(scenario: &Scenario, run: &ForecastRun, headers: &[Stri
     }
 }
 
-/// `+7,000.00` for money in, `−9,500.00` for money out (CASH-ROLL-01's direction, Conventions).
-fn signed_amount(placement: &Placement) -> String {
+/// `P1`, `P2`: a stable label for an intercompany pair (IC-DOC-01), by the order its shared
+/// receivable first appears among this run's Placements — so both legs of a pair carry the same
+/// label (CASH-S09).
+fn pair_label(run: &ForecastRun, placement: &Placement) -> String {
+    let Subject::Intercompany { document, .. } = &placement.subject else {
+        return NONE.to_owned();
+    };
+    let mut seen: Vec<&FactId> = Vec::new();
+    for p in &run.placements {
+        if let Subject::Intercompany { document: d, .. } = &p.subject
+            && !seen.contains(&d)
+        {
+            seen.push(d);
+        }
+    }
+    let index = seen.iter().position(|d| *d == document).unwrap_or(0);
+    format!("P{}", index + 1)
+}
+
+/// `+7,000.00` for money in, `−9,500.00` for money out (CASH-ROLL-01's direction, Conventions),
+/// named with the Entity's own currency when a Group's Reporting Currency differs from it
+/// (CASH-S09's Cascade rows) — `home_amount`'s own convention, applied here since this table's
+/// Amount column carries a sign `home_amount` does not.
+fn signed_amount(scenario: &Scenario, placement: &Placement) -> String {
     let Some(value) = placement.amount else {
         return NONE.to_owned();
     };
+    let prefix = placement
+        .subject
+        .entity()
+        .and_then(|e| scenario.facts().ledger_settings().get(e))
+        .map(|l| l.home_currency)
+        .filter(|home| {
+            scenario
+                .settings()
+                .reporting_currency
+                .is_some_and(|rc| rc != *home)
+        })
+        .map(|home| format!("{} ", home.code()))
+        .unwrap_or_default();
     match placement.outcome {
         Outcome::Placed {
             direction: Direction::In,
             ..
-        } => format!("+{}", amount(value.0.abs())),
+        } => format!("+{prefix}{}", amount(value.0.abs())),
         Outcome::Placed {
             direction: Direction::Out,
             ..
-        } => amount(-value.0.abs()),
-        _ => amount(value.0),
+        } => {
+            let magnitude = value.0.abs();
+            let sign = if magnitude.is_zero() { "" } else { "−" };
+            format!("{sign}{prefix}{}", amount(magnitude))
+        }
+        _ => format!("{prefix}{}", amount(value.0)),
     }
 }
 
@@ -882,6 +1049,237 @@ fn render_weeks(run: &ForecastRun, headers: &[String]) -> Table {
     }
 }
 
+/// An Entity's own figure as the per-Entity summary writes it: named with its Home Currency when
+/// that is not the Group's Reporting Currency, and bare when it is (CASH-S09, CASH-S10). Every
+/// figure in that table is the Entity's own; the Group's are CASH-GROUP-01's, elsewhere.
+fn home_amount(scenario: &Scenario, entity: &EntityId, value: HomeAmount) -> String {
+    let foreign = scenario
+        .facts()
+        .ledger_settings()
+        .get(entity)
+        .map(|ledger| ledger.home_currency)
+        .filter(|home| Some(*home) != scenario.settings().reporting_currency);
+    match foreign {
+        Some(home) => format!("{} {}", home.code(), amount(value.0)),
+        None => amount(value.0),
+    }
+}
+
+/// The per-Entity summary (CASH-S09, CASH-S10): where each Entity's cash starts, what each week
+/// with a movement closes at, and its Low Point. `Week closes` lists the same subset of weeks the
+/// weeks table does, for the same reason (Q153).
+fn render_entities(scenario: &Scenario, run: &ForecastRun, headers: &[String]) -> Table {
+    Table {
+        headers: headers.to_vec(),
+        rows: run
+            .entities
+            .iter()
+            .map(|forecast| {
+                let figure = |value| home_amount(scenario, &forecast.entity, value);
+                headers
+                    .iter()
+                    .map(|h| match h.as_str() {
+                        "Entity" => forecast.entity.0.clone(),
+                        "Opening Cash" => figure(forecast.opening),
+                        "Week closes" => forecast
+                            .weeks
+                            .iter()
+                            .filter(|week| week.confidence.is_some())
+                            .map(|week| format!("W{} {}", week.week.0, figure(week.closing)))
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                        "Low Point" => forecast.low_point.map_or(NONE.to_owned(), |low| {
+                            format!("{} (W{})", figure(low.amount), low.week.0)
+                        }),
+                        other => format!("? {other}"),
+                    })
+                    .collect()
+            })
+            .collect(),
+    }
+}
+
+/// CASH-GROUP-01's totals in the one cell the Group view table gives them: the Entities the total
+/// covers, what it opens at, and each week that moves it. Every figure is in the Reporting
+/// Currency, so none is named with one.
+// ponytail: reads "only" whether or not an Entity was left out; the Scenario that states a whole
+// Group's total writes it as a weeks table instead (CASH-S09), which is checkpoint D's.
+fn group_detail(view: &GroupView) -> String {
+    let weeks: Vec<String> = view
+        .weeks
+        .iter()
+        .filter(|week| !(week.receipts.amount().is_zero() && week.payments.amount().is_zero()))
+        .map(|week| {
+            let mut moved = vec![format!("W{}", week.week.0)];
+            if !week.receipts.amount().is_zero() {
+                moved.push(format!("receipts {}", amount(week.receipts.amount())));
+            }
+            if !week.payments.amount().is_zero() {
+                moved.push(format!("payments {}", amount(week.payments.amount())));
+            }
+            format!(
+                "{}, closes {}",
+                moved.join(" "),
+                amount(week.closing.amount())
+            )
+        })
+        .collect();
+    format!(
+        "{} only: opens {}; {}",
+        view.entities
+            .iter()
+            .map(|entity| entity.0.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        amount(view.opening.amount()),
+        weeks.join("; ")
+    )
+}
+
+/// The Group view as an `Output | Detail | Rules` table (CASH-S10): CASH-GROUP-02's exclusions,
+/// one row each, and CASH-GROUP-01's totals in one row. The totals are the run's `group`, which
+/// is not a Placement: a Group total is a label over a sum and is placed in no week (Q87).
+fn render_group(scenario: &Scenario, run: &ForecastRun, headers: &[String]) -> Table {
+    let mut rows: Vec<Vec<String>> = run
+        .placements
+        .iter()
+        .filter(|p| matches!(p.outcome, Outcome::Excluded(Exclusion::NoConversionRate)))
+        .map(|p| {
+            headers
+                .iter()
+                .map(|h| match h.as_str() {
+                    "Detail" => format!(
+                        "{}, reason \"{}\"",
+                        subject(scenario, &p.subject),
+                        basis(scenario, p, run.as_of)
+                    ),
+                    other => placement_cell(scenario, p, other, run.as_of),
+                })
+                .collect()
+        })
+        .collect();
+    if let Some(view) = &run.group {
+        rows.push(
+            headers
+                .iter()
+                .map(|h| match h.as_str() {
+                    "Output" => "Weekly totals".to_owned(),
+                    "Detail" => group_detail(view),
+                    "Rules" => rules(&view.rules),
+                    other => format!("? {other}"),
+                })
+                .collect(),
+        );
+    }
+    Table {
+        headers: headers.to_vec(),
+        rows,
+    }
+}
+
+/// `+10.00` for a residual that grows the Group's cash, `−10.00` for one that shrinks it. Unlike
+/// `amount`, a positive figure carries its own sign, since the Group view (CASH-S09) states this
+/// one as a movement rather than a magnitude.
+fn signed_reporting(value: Decimal) -> String {
+    if value.is_sign_negative() && !value.is_zero() {
+        amount(value)
+    } else {
+        format!("+{}", amount(value))
+    }
+}
+
+/// Which pair (`pair_label`'s own numbering) placed a leg in this week, in this direction — the
+/// label the Group's Receipts or Payments cell shows in place of a figure once IC-ELIM-01 has
+/// taken every paired leg out of both (CASH-S09: `— (P1 eliminated)`).
+fn eliminated_pairs(run: &ForecastRun, week: Week, direction: Direction) -> Vec<String> {
+    let mut seen: Vec<&FactId> = Vec::new();
+    for p in &run.placements {
+        if let Subject::Intercompany { document, .. } = &p.subject
+            && !seen.contains(&document)
+        {
+            seen.push(document);
+        }
+    }
+    let mut labels = Vec::new();
+    for (index, document) in seen.iter().enumerate() {
+        let matches = run.placements.iter().any(|p| {
+            matches!(&p.subject, Subject::Intercompany { document: d, .. } if d == *document)
+                && matches!(
+                    p.outcome,
+                    Outcome::Placed { week: w, direction: d, .. } if w == week && d == direction
+                )
+        });
+        if matches {
+            labels.push(format!("P{}", index + 1));
+        }
+    }
+    labels
+}
+
+/// CASH-GROUP-01's weekly totals, with IC-ELIM-01's own shape: a week with a paired leg names the
+/// pair eliminated instead of a raw Receipts or Payments figure, and the residual, when there is
+/// one, is `Intercompany currency difference`. Only weeks with movement are listed, the reason
+/// `render_weeks` lists a subset too (Q153) — a paired leg still moved something, even when the
+/// Group's own total ends up unchanged.
+fn render_group_weeks(run: &ForecastRun, headers: &[String]) -> Table {
+    let Some(view) = &run.group else {
+        return Table {
+            headers: headers.to_vec(),
+            rows: Vec::new(),
+        };
+    };
+    Table {
+        headers: headers.to_vec(),
+        rows: view
+            .weeks
+            .iter()
+            .filter(|week| {
+                let index = usize::try_from(week.week.0.saturating_sub(1)).unwrap_or_default();
+                run.entities
+                    .iter()
+                    .any(|e| e.weeks.get(index).is_some_and(|w| w.confidence.is_some()))
+            })
+            .map(|week| {
+                headers
+                    .iter()
+                    .map(|h| match h.as_str() {
+                        "Week" => format!("W{}", week.week.0),
+                        "Opens" => amount(week.opening.amount()),
+                        "Receipts" if week.receipts.amount().is_zero() => {
+                            let pairs = eliminated_pairs(run, week.week, Direction::In);
+                            if pairs.is_empty() {
+                                NONE.to_owned()
+                            } else {
+                                format!("— ({} eliminated)", pairs.join(", "))
+                            }
+                        }
+                        "Receipts" => amount(week.receipts.amount()),
+                        "Payments" if week.payments.amount().is_zero() => {
+                            let pairs = eliminated_pairs(run, week.week, Direction::Out);
+                            if pairs.is_empty() {
+                                NONE.to_owned()
+                            } else {
+                                format!("— ({} eliminated)", pairs.join(", "))
+                            }
+                        }
+                        "Payments" => amount(week.payments.amount()),
+                        "Intercompany currency difference" => {
+                            let value = week.intercompany_difference.amount();
+                            if value.is_zero() {
+                                NONE.to_owned()
+                            } else {
+                                signed_reporting(value)
+                            }
+                        }
+                        "Closes" => amount(week.closing.amount()),
+                        other => format!("? {other}"),
+                    })
+                    .collect()
+            })
+            .collect(),
+    }
+}
+
 /// The Low Point line of a section: the figure and the week it names. It is prose because no table
 /// holds it, and it is compared for the reason `provisional()` is — a figure that reaches the
 /// owner unverified is the failure Q192 exists to stop.
@@ -924,19 +1322,24 @@ fn cash_stretches(
     scenario: &Scenario,
     buffer: Option<HomeAmount>,
     stretches: &[Stretch],
-    trust_relevant: bool,
+    trust_capable: bool,
+    trust_present: bool,
     headroom: Option<HomeAmount>,
 ) -> String {
-    if trust_relevant {
+    // Q279: a sentence with only one one-week stretch and nothing else notable stays short
+    // (CASH-S04); one with more than one stretch, or one spanning more than one week, says so
+    // even with no trust obligation anywhere to name (CASH-S09). CASH-BUFFER-01 is never capable
+    // of the long form at all (Q276).
+    let long_form = trust_capable
+        && (trust_present || stretches.len() > 1 || stretches.iter().any(|s| s.first != s.last));
+    if long_form {
         let mut parts: Vec<String> = Vec::new();
         if let Some(buffer) = buffer {
             parts.push(format!("Buffer {}", amount(buffer.0)));
         }
         for stretch in stretches {
             parts.push(stretch_clause(stretch));
-            parts.push(if stretch.trust.is_empty() {
-                "no trust obligations inside".to_owned()
-            } else {
+            parts.push(if !stretch.trust.is_empty() {
                 format!(
                     "trust obligations inside: {}",
                     stretch
@@ -946,6 +1349,10 @@ fn cash_stretches(
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
+            } else if trust_present {
+                "no trust obligations inside".to_owned()
+            } else {
+                "no trust obligations".to_owned()
             });
         }
         parts.push(match headroom {
@@ -1022,7 +1429,25 @@ fn why_here(scenario: &Scenario, run: &ForecastRun, item: &DecisionItem) -> Stri
 /// order the run holds them. `#` is a compared cell, so a wrong order fails. Every row's class
 /// and position are CASH-ORDER-01's doing, whichever Family's own Rule raised the item, so its
 /// `Rules` cell always cites CASH-ORDER-01 beside the item's own Rule.
+/// The size of the Placement a Subject concerns, excluded or placed alike — what a Subject cell
+/// with no other column for it names in parentheses (CASH-S07). More than one Rule can place the
+/// same Subject (CASH-OPEN-04 excludes a card from Opening Cash, GAP-CARD-01 excludes or places
+/// its balance), always for the same underlying figure, so the largest is taken rather than
+/// summed — summing would double it.
+fn subject_amount(run: &ForecastRun, subject: &Subject) -> Decimal {
+    run.placements
+        .iter()
+        .filter(|p| &p.subject == subject)
+        .filter_map(|p| p.amount.map(|a| a.0.abs()))
+        .fold(Decimal::ZERO, Decimal::max)
+}
+
 fn render_queue(scenario: &Scenario, run: &ForecastRun, headers: &[String]) -> Table {
+    // A queue with neither a "Why here" nor an "Evidence" column has nowhere else to show the
+    // cash an item concerns, so its Subject cell names it in parentheses (CASH-S07). A queue with
+    // either already shows it there, and an item with no amount (S02's, S06's, S10's) is bare
+    // either way.
+    let names_amount = !headers.iter().any(|h| h == "Why here" || h == "Evidence");
     Table {
         headers: headers.to_vec(),
         rows: run
@@ -1036,6 +1461,15 @@ fn render_queue(scenario: &Scenario, run: &ForecastRun, headers: &[String]) -> T
                         "#" => (at + 1).to_string(),
                         "Why here" => why_here(scenario, run, item),
                         "Rules" => format!("{}, CASH-ORDER-01", item_cell(scenario, item, h)),
+                        "Subject" if names_amount => {
+                            let base = item_cell(scenario, item, h);
+                            let total = subject_amount(run, &item.subject);
+                            if total.is_zero() {
+                                base
+                            } else {
+                                format!("{base} ({})", amount(total))
+                            }
+                        }
                         other => item_cell(scenario, item, other),
                     })
                     .collect()
@@ -1066,8 +1500,10 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
     let name = &scenario.name;
     let section =
         section(doc, name).unwrap_or_else(|| panic!("{name}: no section in the Scenario document"));
+    // A section with more than one Expected block heads each (`**Expected: each Entity**`,
+    // `**Expected: Group view (CAD)**`), so the facts end at the first of them.
     let (facts_part, expected_part) = section
-        .split_once("**Expected**")
+        .split_once("**Expected")
         .unwrap_or_else(|| panic!("{name}: no **Expected** in its section"));
 
     let facts_tables = tables(facts_part);
@@ -1092,11 +1528,18 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
             .rows
             .iter()
             .map(|row| {
-                let key = row.first().cloned().unwrap_or_default();
+                let key = row_key(table, row);
+                // A multi-Entity facts table can name the same account twice, once per Entity
+                // (CASH-S09's "RBC Business Chequing"), so a row naming its own Entity resolves
+                // the account within it rather than by name alone.
+                let entity = table
+                    .column("Entity")
+                    .and_then(|c| row.get(c))
+                    .map(String::as_str);
                 table
                     .headers
                     .iter()
-                    .map(|h| fact_cell(scenario, run, &key, h))
+                    .map(|h| fact_cell(scenario, run, &key, h, entity))
                     .collect()
             })
             .collect();
@@ -1132,8 +1575,28 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
     let mut saw_outputs = false;
     let mut saw_items = false;
     for table in &expected {
+        // By the header set, not the first header: a per-Entity Scenario heads both its summary
+        // and its queue with `Entity` (CASH-S09, CASH-S10), and the Group view's totals are not
+        // the Placements an `Output` table otherwise holds.
+        let has = |header: &str| table.column(header).is_some();
         let (what, actual, how): (&str, Table, fn(&str) -> Match) =
             match table.headers.first().map(String::as_str) {
+                _ if has("#") => {
+                    saw_items = true;
+                    (
+                        "the queue",
+                        render_queue(scenario, run, &table.headers),
+                        how_items,
+                    )
+                }
+                Some("Output") if has("Detail") => {
+                    saw_outputs = true;
+                    (
+                        "the Group view",
+                        render_group(scenario, run, &table.headers),
+                        how_placements,
+                    )
+                }
                 Some("Output") => {
                     saw_outputs = true;
                     (
@@ -1150,11 +1613,21 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
                         how_items,
                     )
                 }
-                Some("#") => {
-                    saw_items = true;
+                Some("Entity") if has("Opening Cash") => {
+                    saw_outputs = true;
                     (
-                        "the queue",
-                        render_queue(scenario, run, &table.headers),
+                        "each Entity",
+                        render_entities(scenario, run, &table.headers),
+                        how_items,
+                    )
+                }
+                // The Group's own weeks table (CASH-S09) carries `Intercompany currency
+                // difference` where the per-Entity one carries `Firm`; both head with `Week`.
+                Some("Week") if has("Intercompany currency difference") => {
+                    saw_outputs = true;
+                    (
+                        "the Group's weeks",
+                        render_group_weeks(run, &table.headers),
                         how_items,
                     )
                 }
@@ -1201,9 +1674,17 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
     // Both ways: a reason the document does not cite is as wrong as one the run does not raise.
     // On a "no" line there are no reasons, so a Rule named there is prose saying why the run is
     // not Provisional — CASH-S06's "no, as CASH-WEEK-01 marks" — and not a list to compare.
+    // CASH-PROV-01 itself is never a reason either, on a "yes" line or a "no" one: it marks every
+    // Provisional run by definition (its own catalogue entry says so), so nothing ever constructs
+    // a `ProvisionalReason` citing it, and a document that names it (CASH-S07's "yes
+    // (CASH-PROV-01)") is naming the mechanism, not one of the findings.
     let reasons: BTreeSet<&str> = run.provisional.iter().map(|r| r.rule.0).collect();
     let cited: BTreeSet<&str> = if yes {
-        cited.iter().map(String::as_str).collect()
+        cited
+            .iter()
+            .map(String::as_str)
+            .filter(|r| *r != "CASH-PROV-01")
+            .collect()
     } else {
         BTreeSet::new()
     };
@@ -1227,6 +1708,14 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
                 .entities
                 .iter()
                 .any(|e| e.rules.iter().any(|r| r.0 == rule))
+            || run
+                .group
+                .as_ref()
+                .is_some_and(|g| g.rules.iter().any(|r| r.0 == rule))
+            // CASH-PROV-01 produces neither a Placement nor an item: its output is the run's own
+            // Provisional state and the list of reasons, which the section's Provisional line has
+            // already been compared against.
+            || (rule == "CASH-PROV-01" && run.is_provisional())
     };
     let uncited: Vec<&&str> = declared.iter().filter(|r| !cited_by_run(r)).collect();
     assert!(
