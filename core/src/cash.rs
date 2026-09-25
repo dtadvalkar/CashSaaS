@@ -4,6 +4,7 @@
 //! names them as its input (Q265); AP-DISC-02 still reads `opening_cash` and `weeks` directly.
 
 use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rust_decimal::Decimal;
 
@@ -12,7 +13,8 @@ use crate::facts::{Direction, EntityId, FactId, Facts};
 use crate::forecast::{
     Basis, Confidence, ConfidenceShares, DecisionItem, EntityForecast, Evidence, Exclusion,
     ForecastRun, GroupView, GroupWeek, Horizon, ItemKind, LowPoint, Outcome, Placement, Priority,
-    ProvisionalReason, Role, RuleId, Severity, Stretch, Subject, Week, WeekForecast,
+    ProvisionalReason, Role, RuleId, Severity, Stretch, Subject, TrustInStretch, Week,
+    WeekForecast,
 };
 use crate::ic;
 use crate::money::{Currency, HomeAmount, ReportingAmount};
@@ -341,22 +343,42 @@ fn stretches(weeks: &[WeekForecast], zone: impl Fn(Decimal) -> bool) -> Vec<Stre
     out
 }
 
-/// The government-trust-marked Placements of this Entity landing inside a stretch, by Subject.
-fn trust_inside(run: &ForecastRun, entity: &EntityId, stretch: &Stretch) -> Vec<FactId> {
-    run.placements
+/// The government-trust-marked Placements of this Entity landing inside a stretch, named with
+/// amount and placed week (Q282). Sorted by week, then amount. The name is the Subject's own
+/// (`Subject::trust_label`) — `GST/HST remittance` for GAP-TAX-01's, a document number for a bill
+/// AP-PRIORITY-01 marked — and the citing Rule's id where a Subject has no name of its own.
+fn trust_inside(run: &ForecastRun, entity: &EntityId, stretch: &Stretch) -> Vec<TrustInStretch> {
+    let mut out: Vec<TrustInStretch> = run
+        .placements
         .iter()
         .filter(|p| {
             p.subject.entity() == Some(entity) && p.priority == Some(Priority::GovernmentTrust)
         })
-        .filter_map(|p| match (&p.outcome, &p.subject) {
-            (Outcome::Placed { week, .. }, Subject::Fact(id))
-                if *week >= stretch.first && *week <= stretch.last =>
-            {
-                Some(id.clone())
+        .filter_map(|p| {
+            let Outcome::Placed { week, .. } = p.outcome else {
+                return None;
+            };
+            if week < stretch.first || week > stretch.last {
+                return None;
             }
-            _ => None,
+            let amount = p.amount?;
+            let label = p
+                .subject
+                .trust_label()
+                .unwrap_or_else(|| p.rule.0.to_owned());
+            Some(TrustInStretch {
+                label,
+                amount,
+                week,
+            })
         })
-        .collect()
+        .collect();
+    out.sort_by(|a, b| {
+        a.week
+            .cmp(&b.week)
+            .then_with(|| a.amount.0.cmp(&b.amount.0))
+    });
+    out
 }
 
 /// CASH-SHORT-01 and CASH-BUFFER-01: one "cash shortfall" item when any week closes below zero,
@@ -392,7 +414,7 @@ fn cash_findings(
             subject: Subject::Entity(entity.clone()),
             rule: CASH_SHORT_01,
             acted_on_by: Role::Owner,
-            severity: Severity::Critical,
+            severity: Severity::Action,
             evidence: Some(Evidence::CashStretches {
                 buffer: None,
                 stretches,
@@ -415,7 +437,7 @@ fn cash_findings(
                 subject: Subject::Entity(entity.clone()),
                 rule: CASH_BUFFER_01,
                 acted_on_by: Role::Owner,
-                severity: Severity::Critical,
+                severity: Severity::Action,
                 evidence: Some(Evidence::CashStretches {
                     buffer: Some(buf),
                     stretches: below_buffer,
@@ -580,6 +602,7 @@ fn scheduled_receipts(
             };
             run.placements.push(Placement {
                 subject: Subject::Occurrence {
+                    entity: id.entity.clone(),
                     template: id.clone(),
                     date: on,
                 },
@@ -697,17 +720,26 @@ fn rate_of(rates: &[(EntityId, Decimal)], entity: &EntityId) -> Option<Decimal> 
 }
 
 /// The Group's receipts or payments for a week, converted and summed across included Entities,
-/// with every Placement paired by IC-DOC-01 left out (IC-ELIM-01: those eliminate instead, into
-/// `intercompany_difference`).
+/// with every Placement of a paired intercompany document left out (IC-ELIM-01: those eliminate
+/// instead, into `intercompany_difference`). An unpaired intercompany Placement stays in the
+/// totals — it has no other side to cancel against.
 fn external_movement(
     run: &ForecastRun,
     rates: &[(EntityId, Decimal)],
     week: Week,
     direction: Direction,
 ) -> ReportingAmount {
+    let paired = paired_documents(run);
+    let paired_occs = paired_ic_occurrences(run);
     run.placements
         .iter()
-        .filter(|p| !matches!(p.subject, Subject::Intercompany { .. }))
+        .filter(|p| match &p.subject {
+            Subject::Intercompany { document, .. } => !paired.contains(document),
+            Subject::Occurrence {
+                template, date: on, ..
+            } if p.rule.family() == "IC" => !paired_occs.contains(&(template, *on)),
+            _ => true,
+        })
         .filter_map(|p| {
             let Outcome::Placed {
                 week: w,
@@ -727,21 +759,59 @@ fn external_movement(
         .fold(ReportingAmount::ZERO, ReportingAmount::saturating_add)
 }
 
+/// Documents that have exactly two Intercompany Placement legs (IC-ELIM-01). One leg is unpaired
+/// and is not eliminated; three would be a construction error, treated as unpaired.
+fn paired_documents(run: &ForecastRun) -> BTreeSet<&FactId> {
+    let mut counts: BTreeMap<&FactId, usize> = BTreeMap::new();
+    for p in &run.placements {
+        if let Subject::Intercompany { document, .. } = &p.subject
+            && matches!(p.outcome, Outcome::Placed { .. })
+        {
+            *counts.entry(document).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, n)| *n == 2)
+        .map(|(d, _)| d)
+        .collect()
+}
+
+/// IC-LOAN-01 schedule occurrences with exactly two legs (IC-ELIM-01).
+fn paired_ic_occurrences(run: &ForecastRun) -> BTreeSet<(&FactId, chrono::NaiveDate)> {
+    let mut counts: BTreeMap<(&FactId, chrono::NaiveDate), usize> = BTreeMap::new();
+    for p in &run.placements {
+        if let Subject::Occurrence {
+            template, date: on, ..
+        } = &p.subject
+            && matches!(p.outcome, Outcome::Placed { .. })
+            && p.rule.family() == "IC"
+        {
+            *counts.entry((template, *on)).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, n)| *n == 2)
+        .map(|(k, _)| k)
+        .collect()
+}
+
 /// IC-ELIM-01: the part of each intercompany pair placed this week that does not eliminate at the
 /// conversion rate — zero for a same-currency pair, the residual for a cross-currency one. A leg
 /// whose Entity has no conversion rate (CASH-GROUP-02) is left out of the pair entirely, as the
-/// Group total already leaves that Entity out.
+/// Group total already leaves that Entity out. Unpaired Placements do not contribute.
 fn intercompany_difference(
     run: &ForecastRun,
     rates: &[(EntityId, Decimal)],
     week: Week,
 ) -> ReportingAmount {
-    let mut by_document: std::collections::BTreeMap<&FactId, ReportingAmount> =
-        std::collections::BTreeMap::new();
+    let paired = paired_documents(run);
+    let paired_occs = paired_ic_occurrences(run);
+    let mut by_document: BTreeMap<&FactId, ReportingAmount> = BTreeMap::new();
+    let mut by_occurrence: BTreeMap<(&FactId, chrono::NaiveDate), ReportingAmount> =
+        BTreeMap::new();
     for p in &run.placements {
-        let Subject::Intercompany { entity, document } = &p.subject else {
-            continue;
-        };
         let Outcome::Placed {
             week: w, direction, ..
         } = p.outcome
@@ -751,6 +821,9 @@ fn intercompany_difference(
         if w != week {
             continue;
         }
+        let Some(entity) = p.subject.entity() else {
+            continue;
+        };
         let Some(rate) = rate_of(rates, entity) else {
             continue;
         };
@@ -759,11 +832,25 @@ fn intercompany_difference(
             Direction::In => ReportingAmount::convert(amount, rate),
             Direction::Out => ReportingAmount::convert(HomeAmount(-amount.0), rate),
         };
-        let entry = by_document.entry(document).or_insert(ReportingAmount::ZERO);
-        *entry = entry.saturating_add(signed);
+        match &p.subject {
+            Subject::Intercompany { document, .. } if paired.contains(document) => {
+                let entry = by_document.entry(document).or_insert(ReportingAmount::ZERO);
+                *entry = entry.saturating_add(signed);
+            }
+            Subject::Occurrence {
+                template, date: on, ..
+            } if p.rule.family() == "IC" && paired_occs.contains(&(template, *on)) => {
+                let entry = by_occurrence
+                    .entry((template, *on))
+                    .or_insert(ReportingAmount::ZERO);
+                *entry = entry.saturating_add(signed);
+            }
+            _ => {}
+        }
     }
     by_document
         .into_values()
+        .chain(by_occurrence.into_values())
         .fold(ReportingAmount::ZERO, ReportingAmount::saturating_add)
 }
 
@@ -817,7 +904,7 @@ pub fn run(
     // IC-MAP-01 and IC-DOC-01: cross-Entity, so it runs before any Entity's own roll, on the
     // Placements every other Family has already made — AR-OPEN-03 and AP-OPEN-03 excluded both
     // legs of a paired intercompany document, which this replaces with the real pair.
-    ic::run(run, facts, classifications);
+    ic::run(run, facts, classifications, settings);
     // CASH-WEEK-01: the horizon is per Group and has no general default, so an unset one is asked
     // for once, not once per Entity. With none set no weeks are produced and nothing is bucketed.
     if settings.horizon.is_none() {

@@ -1,10 +1,9 @@
 # IC — Intercompany
 
-Status: **approved by the owner** (2026-09-14). Four Rules belong to the CASH build, which writes
-them ahead of this Family in `core/src/ic.rs` because CASH-S09 reads them (Q275): IC-MAP-01,
-IC-DOC-01, IC-ELIM-01 and IC-FUND-01. They are declared by no test, and their gate is
-`tools/mutate.py cash` over CASH-S09 — which pins the first three and does not reach IC-FUND-01's
-substance, so that Rule is unproven until IC-S07. Nothing else here is built.
+Status: **approved by the owner** (2026-09-14). Built: every Rule here is implemented in
+`core/src/ic.rs` and covered by a Scenario test, with coverage gated against the table in
+`docs/scenarios/ic.md` (`scenarios/tests/coverage.rs`). IC-MAP-01, IC-DOC-01, IC-ELIM-01 and
+IC-FUND-01 were written a Family early for CASH (Q275); this Family's tests now gate them too.
 
 What this Family does: forecasts cash moving between Entities in the same Group, pairs both
 sides so the Group view can eliminate them, checks that reciprocal balances agree, and points

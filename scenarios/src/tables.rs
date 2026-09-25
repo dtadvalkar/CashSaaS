@@ -13,7 +13,7 @@ impl Table {
         self.headers.iter().position(|h| h == header)
     }
 
-    pub fn markdown(&self) -> String {
+    pub(crate) fn markdown(&self) -> String {
         let mut out = row_markdown(&self.headers);
         out.push_str(&row_markdown(
             &self
@@ -113,6 +113,13 @@ pub fn tokens(cell: &str) -> Vec<String> {
         .collect()
 }
 
+fn rule_id_set(cell: &str) -> Vec<String> {
+    let mut ids: Vec<_> = tokens(cell).into_iter().filter(|t| is_rule_id(t)).collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
 /// How a column is compared. The document may say less than the run knows, never something
 /// different: what it states must match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,7 +128,8 @@ pub enum Match {
     Exact,
     /// The first word matches exactly and every other word the document uses appears.
     Loose,
-    /// Every Rule ID the document cites is cited by the run.
+    /// Exact set equality of Rule IDs: every ID the document cites appears on the run, and every
+    /// ID the run cites appears in the document. Order and non-ID tokens (Q-notes) are ignored.
     Rules,
     /// Shown, never compared: prose.
     Ignored,
@@ -136,13 +144,7 @@ pub fn cell_matches(how: Match, expected: &str, actual: &str) -> bool {
             let actual = tokens(actual);
             expected.first() == actual.first() && expected.iter().all(|t| actual.contains(t))
         }
-        Match::Rules => {
-            let actual = tokens(actual);
-            tokens(expected)
-                .iter()
-                .filter(|t| is_rule_id(t))
-                .all(|t| actual.contains(t))
-        }
+        Match::Rules => rule_id_set(expected) == rule_id_set(actual),
     }
 }
 

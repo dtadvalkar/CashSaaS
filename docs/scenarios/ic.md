@@ -1,7 +1,9 @@
 # IC Scenarios
 
-Status: **approved by the owner** (2026-09-14). Nothing here is built. IC-S07 is the Scenario that
-first proves IC-FUND-01, which the CASH build writes ahead of this Family (Q275).
+Status: **approved by the owner** (2026-09-14). Built: every Scenario here passes as a test in
+`scenarios/tests/ic.rs`, and `tools/mutate.py ic` sweeps this document for figures a test
+would not catch. This document is fixed input: when a test disagrees with it, the code is wrong
+(`README.md`).
 
 Each Scenario is a named general accounting concern, described as Canonical Facts and Settings,
 with the outputs the IC Rules must produce (ADR-0010, ADR-0016). Together these exercise every
@@ -36,11 +38,13 @@ paired so the Group view cancels it; a side not booked gets a draft.
 
 **Facts.** Maple Ridge and Birch Hill only.
 
-| Document | Issued by | Paid by | Dated | Due | Amount | Other side |
+| Document | Entity | Counterparty | Dated | Due | Open | Planned payment date |
 |---|---|---|---|---|---|---|
-| Invoice BH-501 (nursery stock) | Birch Hill | Maple Ridge | 10-01 | 10-31 | 4,000.00 | Maple Ridge bill, reference BH-501, planned payment date 10-21 |
-| Invoice MR-M09 (September management fee) | Maple Ridge | Birch Hill | 09-15 | 09-30 | 1,500.00 | Birch Hill bill, reference MGMT-SEP, dated 09-15, 1,500.00, no planned date |
-| Invoice BH-502 (nursery stock) | Birch Hill | Maple Ridge | 10-05 | 11-04 | 2,200.00 | none booked in Maple Ridge |
+| BH-501 | Birch Hill Nursery Ltd. | Maple Ridge Landscaping Ltd. | 10-01 | 10-31 | 4,000.00 | — |
+| BH-501 | Maple Ridge Landscaping Ltd. | Birch Hill Nursery Ltd. | 10-01 | 10-31 | 4,000.00 | 10-21 |
+| MR-M09 | Maple Ridge Landscaping Ltd. | Birch Hill Nursery Ltd. | 09-15 | 09-30 | 1,500.00 | — |
+| MGMT-SEP | Birch Hill Nursery Ltd. | Maple Ridge Landscaping Ltd. | 09-15 | 09-30 | 1,500.00 | — |
+| BH-502 | Birch Hill Nursery Ltd. | Maple Ridge Landscaping Ltd. | 10-05 | 11-04 | 2,200.00 | — |
 
 At 09-30, MR-M09 is the only open intercompany document, and both sides show 1,500.00.
 
@@ -48,19 +52,18 @@ At 09-30, MR-M09 is the only open intercompany document, and both sides show 1,5
 
 | Output | Entity | Document | Week | Amount | Basis | Confidence | Pair | Rules |
 |---|---|---|---|---|---|---|---|---|
-| Placement, payment | Maple Ridge | BH-501 | W3 (10-21) | 4,000.00 | intercompany document | firm | P1 | IC-DOC-01 |
-| Placement, receipt | Birch Hill | BH-501 | W3 (10-21) | 4,000.00 | intercompany document | firm | P1 | IC-DOC-01, IC-ELIM-01 |
-| Placement, payment | Birch Hill | MR-M09 | W1 | 1,500.00 | intercompany document | firm | P2 | IC-DOC-01 |
-| Placement, receipt | Maple Ridge | MR-M09 | W1 | 1,500.00 | intercompany document | firm | P2 | IC-DOC-01, IC-ELIM-01 |
-| Placement, payment | Maple Ridge | BH-502 | W5 (11-04) | 2,200.00 | intercompany document | firm | P3 | IC-DOC-01 |
-| Placement, receipt | Birch Hill | BH-502 | W5 (11-04) | 2,200.00 | intercompany document | firm | P3 | IC-DOC-01, IC-ELIM-01 |
+| Placement, payment | Maple Ridge | BH-501 | W3 (10-21) | 4,000.00 | intercompany document | firm | P1 | IC-MAP-01, IC-DOC-01 |
+| Placement, receipt | Birch Hill | BH-501 | W3 (10-21) | 4,000.00 | intercompany document | firm | P1 | IC-MAP-01, IC-DOC-01, IC-ELIM-01 |
+| Placement, payment | Maple Ridge | BH-502 | W5 (11-04) | 2,200.00 | intercompany document | firm | P2 | IC-MAP-01, IC-DOC-01 |
+| Placement, receipt | Birch Hill | BH-502 | W5 (11-04) | 2,200.00 | intercompany document | firm | P2 | IC-MAP-01, IC-DOC-01, IC-ELIM-01 |
+| Placement, payment | Birch Hill | MR-M09 | W1 | 1,500.00 | intercompany document | firm | P3 | IC-MAP-01, IC-DOC-01 |
+| Placement, receipt | Maple Ridge | MR-M09 | W1 | 1,500.00 | intercompany document | firm | P3 | IC-MAP-01, IC-DOC-01, IC-ELIM-01 |
 
 | Entity | Decision Item | Subject | Acted on by | Draft Correction | Rules |
 |---|---|---|---|---|---|
 | Maple Ridge | counterparty has not booked | BH-502 | bookkeeper | Bill from Birch Hill Nursery Ltd., reference BH-502, dated 10-05, due 11-04, 2,200.00 | IC-DOC-02 |
 
-- **BH-501 lands in W3 on both sides,** at the payer's planned date, not Birch Hill's due date
-  (10-31, W4).
+- **BH-501 lands in W3 on both sides,** at the payer's planned date, not Birch Hill's due date.
 - **MR-M09 is overdue,** so both sides land in W1.
 - **BH-502 is matched by nothing:** Maple Ridge has no bill with that reference, or with that
   amount and date. Only Birch Hill's side is booked, so its dates are used, and Maple Ridge still
@@ -76,39 +79,52 @@ At 09-30, MR-M09 is the only open intercompany document, and both sides show 1,5
 Concern: a balance between Entities has no due date, so it is forecast only from the owner's
 schedule; without one it is shown and the owner is asked, and the run stays settled.
 
-**Facts.** Maple Ridge and Birch Hill only. Balances at 09-30 and 10-07, agreeing on both sides:
+**Facts.** Maple Ridge and Birch Hill only. Balances at 09-30 and 10-07, agreeing on both sides.
+Debit-positive (liability balances are stored negative; the table shows the magnitude).
 
-| Balance | Maple Ridge account | Birch Hill account | Amount | Settings |
-|---|---|---|---|---|
-| L1 | Loan to Birch Hill | Loan from Maple Ridge | 30,000.00 at 09-30; 27,500.00 at 10-07 | Settlement schedule: Birch Hill pays Maple Ridge 2,500.00 monthly, next date 10-15 |
-| L2 | Due to Birch Hill | Due from Maple Ridge | 8,000.00 | none |
-| L3 | Long-term Advance to Birch Hill | Long-term Advance from Maple Ridge | 50,000.00 | confirmed "not settling within the horizon" |
+| Entity | Account | Classification | As of | Balance | Settings |
+|---|---|---|---|---|---|
+| Maple Ridge Landscaping Ltd. | Loan to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 09-30 | 30,000.00 | settlement schedule L1: Birch Hill Nursery Ltd. pays Maple Ridge Landscaping Ltd. 2,500.00 monthly, next date 10-15 |
+| Birch Hill Nursery Ltd. | Loan from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 09-30 | −30,000.00 | settlement schedule L1: Birch Hill Nursery Ltd. pays Maple Ridge Landscaping Ltd. 2,500.00 monthly, next date 10-15 |
+| Maple Ridge Landscaping Ltd. | Loan to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 10-07 | 27,500.00 | settlement schedule L1: Birch Hill Nursery Ltd. pays Maple Ridge Landscaping Ltd. 2,500.00 monthly, next date 10-15 |
+| Birch Hill Nursery Ltd. | Loan from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 10-07 | −27,500.00 | settlement schedule L1: Birch Hill Nursery Ltd. pays Maple Ridge Landscaping Ltd. 2,500.00 monthly, next date 10-15 |
+| Maple Ridge Landscaping Ltd. | Due to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 09-30 | −8,000.00 | none |
+| Birch Hill Nursery Ltd. | Due from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 09-30 | 8,000.00 | none |
+| Maple Ridge Landscaping Ltd. | Due to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 10-07 | −8,000.00 | none |
+| Birch Hill Nursery Ltd. | Due from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 10-07 | 8,000.00 | none |
+| Maple Ridge Landscaping Ltd. | Long-term Advance to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 09-30 | 50,000.00 | confirmed not settling within the horizon |
+| Birch Hill Nursery Ltd. | Long-term Advance from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 09-30 | −50,000.00 | confirmed not settling within the horizon |
+| Maple Ridge Landscaping Ltd. | Long-term Advance to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 10-07 | 50,000.00 | confirmed not settling within the horizon |
+| Birch Hill Nursery Ltd. | Long-term Advance from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 10-07 | −50,000.00 | confirmed not settling within the horizon |
 
-Transfer 10-05: 2,500.00 from Birch Hill's RBC Business Chequing to Maple Ridge's, booked in both
-Entities against L1.
+| Entity | Transaction | Account | Counterparty | Dated | Amount |
+|---|---|---|---|---|---|
+| Birch Hill Nursery Ltd. | TX-L1 | RBC Business Chequing | Maple Ridge Landscaping Ltd. | 10-05 | 2,500.00 |
+| Maple Ridge Landscaping Ltd. | TX-L1-IN | RBC Business Chequing | Birch Hill Nursery Ltd. | 10-05 | 2,500.00 |
 
 **Expected**
 
 | Output | Entity | Item | Week | Amount | Basis / reason | Confidence | Pair | Rules |
 |---|---|---|---|---|---|---|---|---|
 | Exclusion | both | L1 occurrence 10-15 | — | 2,500.00 | covered by transfer 10-05 | — | — | IC-LOAN-01 |
-| Placement, payment | Birch Hill | L1 occurrence 11-15 | W6 | 2,500.00 | intercompany schedule | firm | P1 | IC-LOAN-01 |
-| Placement, receipt | Maple Ridge | L1 occurrence 11-15 | W6 | 2,500.00 | intercompany schedule | firm | P1 | IC-LOAN-01 |
-| Placement, payment | Birch Hill | L1 occurrence 12-15 | W10 | 2,500.00 | intercompany schedule | firm | P2 | IC-LOAN-01 |
-| Placement, receipt | Maple Ridge | L1 occurrence 12-15 | W10 | 2,500.00 | intercompany schedule | firm | P2 | IC-LOAN-01 |
-| Exclusion | Maple Ridge | L2 | — | 8,000.00 | no settlement schedule | — | — | IC-LOAN-02 |
-| Exclusion | Birch Hill | L2 | — | 8,000.00 | no settlement schedule | — | — | IC-LOAN-02 |
-| Exclusion | Maple Ridge | L3 | — | 50,000.00 | confirmed not settling within the horizon | — | — | IC-LOAN-02 |
-| Exclusion | Birch Hill | L3 | — | 50,000.00 | confirmed not settling within the horizon | — | — | IC-LOAN-02 |
+| Placement, payment | Birch Hill | L1 occurrence 11-15 | W6 | 2,500.00 | intercompany schedule | firm | P1 | IC-LOAN-01, IC-ELIM-01 |
+| Placement, receipt | Maple Ridge | L1 occurrence 11-15 | W6 | 2,500.00 | intercompany schedule | firm | P1 | IC-LOAN-01, IC-ELIM-01 |
+| Placement, payment | Birch Hill | L1 occurrence 12-15 | W10 | 2,500.00 | intercompany schedule | firm | P2 | IC-LOAN-01, IC-ELIM-01 |
+| Placement, receipt | Maple Ridge | L1 occurrence 12-15 | W10 | 2,500.00 | intercompany schedule | firm | P2 | IC-LOAN-01, IC-ELIM-01 |
+| Exclusion | Maple Ridge | Due to Birch Hill | — | 8,000.00 | no settlement schedule | — | — | IC-LOAN-02 |
+| Exclusion | Birch Hill | Due from Maple Ridge | — | 8,000.00 | no settlement schedule | — | — | IC-LOAN-02 |
+| Exclusion | Maple Ridge | Long-term Advance to Birch Hill | — | 50,000.00 | confirmed not settling within the horizon | — | — | IC-LOAN-02 |
+| Exclusion | Birch Hill | Long-term Advance from Maple Ridge | — | 50,000.00 | confirmed not settling within the horizon | — | — | IC-LOAN-02 |
 
 | Entity | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|---|
-| Maple Ridge and Birch Hill (one item) | intercompany settlement plan | L2, 8,000.00 | owner | IC-LOAN-02 (Q161) |
+| Maple Ridge and Birch Hill (one item) | intercompany settlement plan | Due to Birch Hill, 8,000.00 | owner | IC-LOAN-02 (Q161) |
 
-- **The 10-05 transfer** is nearer 10-15 than 09-15, so it covers 10-15 (Q149).
+- **The mid-month transfer** is nearer the mid-month occurrence than the prior one, so it covers
+  that occurrence (Q149).
 - **L3 raises no item:** confirming closed it.
-- **Agreement:** at 09-30 each Entity shows 72,000.00 net owed by Birch Hill to Maple Ridge
-  (30,000.00 − 8,000.00 + 50,000.00), so IC-AGREE-01 raises nothing.
+- **Agreement:** at month-end each Entity's intercompany balances net the same way (Facts), so
+  IC-AGREE-01 raises nothing.
 - **Provisional:** no.
 
 ---
@@ -120,10 +136,10 @@ is asked to fix what stops the pairing.
 
 **Facts.** Maple Ridge and Birch Hill are connected; Cascade is in the Group but not connected.
 
-| Document | Maple Ridge contact | Classification | Due | Amount |
-|---|---|---|---|---|
-| Bill LFH-0930 (management fee) | Lee Family Holdings Inc. | intercompany, no counterparty named | 10-20 | 3,000.00 |
-| Invoice MR-C12 (landscaping for Cascade's retail yard) | Cascade Garden Supply Inc. | intercompany, names Cascade | 10-28 | 2,400.00 |
+| Document | Entity | Counterparty | Classification | Due | Open |
+|---|---|---|---|---|---|
+| LFH-0930 | Maple Ridge Landscaping Ltd. | Lee Family Holdings Inc. | intercompany, no counterparty named | 10-20 | 3,000.00 |
+| MR-C12 | Maple Ridge Landscaping Ltd. | Cascade Garden Supply Inc. | intercompany, names Cascade | 10-28 | 2,400.00 |
 
 **Expected**
 
@@ -138,7 +154,7 @@ is asked to fix what stops the pairing.
 | Maple Ridge | connect intercompany counterparty | Cascade Garden Supply Inc. | owner | IC-ONESIDED-01 |
 
 - **LFH-0930 stays in the forecast** on its own dates, unpaired (Q162). Left out of AP and not
-  forecast by IC, a real 3,000.00 payment would vanish.
+  forecast by IC, a real payment of that size would vanish.
 - **Neither Placement eliminates** in the Group view, and neither balance can be agreed.
 - **Provisional:** no.
 
@@ -150,11 +166,15 @@ Concern: two Entities that disagree about what one owes the other can't both be 
 forecast is Provisional until someone investigates; no journal is guessed.
 
 **Facts.** Maple Ridge and Birch Hill only. No tolerance. Balances at 09-30 and 10-07, confirmed
-"not settling within the horizon":
+"not settling within the horizon". Debit-positive (liability balances are stored negative; the
+table shows the signed figure).
 
-| Maple Ridge account | Amount | Birch Hill account | Amount |
-|---|---|---|---|
-| Advance to Birch Hill | 12,400.00 | Advance from Maple Ridge | 12,000.00 |
+| Entity | Account | Classification | As of | Balance | Settings |
+|---|---|---|---|---|---|
+| Maple Ridge Landscaping Ltd. | Advance to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 09-30 | 12,400.00 | confirmed not settling within the horizon |
+| Birch Hill Nursery Ltd. | Advance from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 09-30 | −12,000.00 | confirmed not settling within the horizon |
+| Maple Ridge Landscaping Ltd. | Advance to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 10-07 | 12,400.00 | confirmed not settling within the horizon |
+| Birch Hill Nursery Ltd. | Advance from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 10-07 | −12,000.00 | confirmed not settling within the horizon |
 
 **Expected**
 
@@ -178,12 +198,20 @@ Concern: a Group may accept small differences, and balances in different currenc
 to differ after translation, so the difference is explained rather than blocking.
 
 **Facts.** All three Entities. Settings: intercompany tolerance 50.00; conversion rate USD to CAD
-1.3600. Balances at 09-30 and 10-07, each confirmed "not settling within the horizon":
+1.3600; Reporting Currency CAD. Balances at 09-30 and 10-07, each confirmed "not settling within
+the horizon". Debit-positive (liability balances are stored negative; the table shows the signed
+figure).
 
-| Pair | First side | Second side |
-|---|---|---|
-| Maple Ridge and Birch Hill | Maple Ridge, Advance to Birch Hill, 12,025.00 | Birch Hill, Advance from Maple Ridge, 12,000.00 |
-| Maple Ridge and Cascade | Maple Ridge, Due to Cascade Garden Supply, 6,700.00 | Cascade, Due from Maple Ridge, USD 5,000.00 |
+| Entity | Account | Classification | As of | Balance | Settings |
+|---|---|---|---|---|---|
+| Maple Ridge Landscaping Ltd. | Advance to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 09-30 | 12,025.00 | confirmed not settling within the horizon |
+| Birch Hill Nursery Ltd. | Advance from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 09-30 | −12,000.00 | confirmed not settling within the horizon |
+| Maple Ridge Landscaping Ltd. | Advance to Birch Hill | intercompany, Birch Hill Nursery Ltd. | 10-07 | 12,025.00 | confirmed not settling within the horizon |
+| Birch Hill Nursery Ltd. | Advance from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 10-07 | −12,000.00 | confirmed not settling within the horizon |
+| Maple Ridge Landscaping Ltd. | Due to Cascade Garden Supply | intercompany, Cascade Garden Supply Inc. | 09-30 | −6,700.00 | confirmed not settling within the horizon |
+| Cascade Garden Supply Inc. | Due from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 09-30 | 5,000.00 | confirmed not settling within the horizon |
+| Maple Ridge Landscaping Ltd. | Due to Cascade Garden Supply | intercompany, Cascade Garden Supply Inc. | 10-07 | −6,700.00 | confirmed not settling within the horizon |
+| Cascade Garden Supply Inc. | Due from Maple Ridge | intercompany, Maple Ridge Landscaping Ltd. | 10-07 | 5,000.00 | confirmed not settling within the horizon |
 
 **Expected**
 
@@ -198,8 +226,8 @@ to differ after translation, so the difference is explained rather than blocking
 |---|---|---|---|---|---|
 | Maple Ridge and Cascade (one item) | intercompany currency difference | Maple Ridge and Cascade, September 2026 | accountant | Cascade USD 5,000.00 at 1.3600 = 6,800.00; Maple Ridge 6,700.00; difference 100.00; currency movement is expected | IC-AGREE-02 |
 
-- **Maple Ridge and Birch Hill differ by 25.00,** within the 50.00 tolerance, so IC-AGREE-01
-  raises nothing.
+- **Maple Ridge and Birch Hill** differ within the intercompany tolerance (Facts), so
+  IC-AGREE-01 raises nothing.
 - **Provisional:** no. A cross-currency difference never blocks (Q125).
 
 ---
@@ -209,28 +237,32 @@ to differ after translation, so the difference is explained rather than blocking
 Concern: a recharge between Entities in different currencies eliminates at the Group rate, and
 what doesn't eliminate is shown as currency difference, not hidden.
 
-**Facts.** Maple Ridge and Cascade. Settings: conversion rate USD to CAD 1.3600.
+**Facts.** Maple Ridge and Cascade. Settings: conversion rate USD to CAD 1.3600; Reporting
+Currency CAD. `Open (document)` is in the document's own currency; `Total` is Home Currency.
 
-| Document | Issued by | Paid by | Dated | Due | Issuer's side | Payer's side |
-|---|---|---|---|---|---|---|
-| Invoice CG-2207 | Cascade | Maple Ridge | 10-01 | 10-28 | USD 1,000.00 | bill USD 1,000.00 booked at 1.3500 = CAD 1,350.00 |
-| Invoice MR-C20 | Maple Ridge | Cascade | 10-06 | 11-05 | CAD 2,000.00 | bill CAD 2,000.00 booked at 0.7400 = USD 1,480.00 |
+| Document | Entity | Counterparty | Dated | Due | Currency | Open (document) | Booked rate | Total |
+|---|---|---|---|---|---|---|---|---|
+| CG-2207 | Cascade Garden Supply Inc. | Maple Ridge Landscaping Ltd. | 10-01 | 10-28 | USD | 1,000.00 | — | 1,000.00 |
+| CG-2207 | Maple Ridge Landscaping Ltd. | Cascade Garden Supply Inc. | 10-01 | 10-28 | USD | 1,000.00 | 1.3500 | 1,350.00 |
+| MR-C20 | Maple Ridge Landscaping Ltd. | Cascade Garden Supply Inc. | 10-06 | 11-05 | CAD | 2,000.00 | — | 2,000.00 |
+| MR-C20 | Cascade Garden Supply Inc. | Maple Ridge Landscaping Ltd. | 10-06 | 11-05 | CAD | 2,000.00 | 0.7400 | 1,480.00 |
 
 **Expected**
 
 | Output | Entity | Document | Week | Amount (Home Currency) | Recorded on Placement | Confidence | Pair | Rules |
 |---|---|---|---|---|---|---|---|---|
-| Placement, payment | Maple Ridge | CG-2207 | W4 | 1,350.00 | USD 1,000.00 at 1.3500 | firm | P1 | IC-DOC-01 |
-| Placement, receipt | Cascade | CG-2207 | W4 | USD 1,000.00 | — | firm | P1 | IC-DOC-01 |
-| Placement, receipt | Maple Ridge | MR-C20 | W5 | 2,000.00 | — | firm | P2 | IC-DOC-01 |
-| Placement, payment | Cascade | MR-C20 | W5 | USD 1,480.00 | CAD 2,000.00 at 0.7400 | firm | P2 | IC-DOC-01 |
+| Placement, payment | Maple Ridge | CG-2207 | W4 | 1,350.00 | USD 1,000.00 at 1.3500 | firm | P1 | IC-MAP-01, IC-DOC-01 |
+| Placement, receipt | Cascade | CG-2207 | W4 | USD 1,000.00 | — | firm | P1 | IC-MAP-01, IC-DOC-01, IC-ELIM-01 |
+| Placement, receipt | Maple Ridge | MR-C20 | W5 | 2,000.00 | — | firm | P2 | IC-MAP-01, IC-DOC-01, IC-ELIM-01 |
+| Placement, payment | Cascade | MR-C20 | W5 | USD 1,480.00 | CAD 2,000.00 at 0.7400 | firm | P2 | IC-MAP-01, IC-DOC-01 |
 
 | Group-view line | Week | Amount (CAD) | Working | Rules |
 |---|---|---|---|---|
 | intercompany currency difference, P1 | W4 | +10.00 | Cascade receives 1,000.00 × 1.3600 = 1,360.00; Maple Ridge pays 1,350.00 | IC-ELIM-01 |
 | intercompany currency difference, P2 | W5 | −12.80 | Maple Ridge receives 2,000.00; Cascade pays 1,480.00 × 1.3600 = 2,012.80 | IC-ELIM-01 |
 
-- **No Decision Items, not Provisional.** Nothing was open at 09-30, so there's nothing to agree.
+- **No Decision Items, not Provisional.** Nothing was open at the last completed month-end, so
+  there's nothing to agree.
 
 ---
 
@@ -239,31 +271,47 @@ what doesn't eliminate is shown as currency difference, not hidden.
 Concern: when one Entity runs short and another could lend without falling below zero or its own
 buffer, the owner is told, with what such a transfer would mean; nothing is moved.
 
-**Facts.** All three Entities. Settings: conversion rate USD to CAD 1.3600. No intercompany
-documents or balances.
+**Facts.** All three Entities. Settings: conversion rate USD to CAD 1.3600; Reporting Currency CAD;
+Minimum Cash Buffer Maple Ridge 15,000.00, Cascade USD 5,000.00; Birch Hill none. No intercompany
+documents or balances. Placements from AR and AP land on the due dates below.
 
-| Entity | Opening Cash | Minimum Cash Buffer | Placements from AR and AP |
-|---|---|---|---|
-| Birch Hill | 5,000.00 | none | W6 −8,000.00; W9 −1,500.00; W12 +6,000.00 |
-| Maple Ridge | 30,000.00 | 15,000.00 | W3 −6,000.00; W8 −3,000.00; W10 +5,000.00 |
-| Cascade | USD 9,000.00 | USD 5,000.00 | W7 −USD 2,000.00 |
+| Entity | Account | Classification | As of | Balance |
+|---|---|---|---|---|
+| Birch Hill Nursery Ltd. | RBC Business Chequing | bank | 10-07 | 5,000.00 |
+| Maple Ridge Landscaping Ltd. | RBC Business Chequing | bank | 10-07 | 30,000.00 |
+| Cascade Garden Supply Inc. | Chase Business Checking | bank | 10-07 | 9,000.00 |
+
+| Document | Entity | Counterparty | Due | Open |
+|---|---|---|---|---|
+| BH-W6 | Birch Hill Nursery Ltd. | Western Turf Farms | 11-12 | 8,000.00 |
+| BH-W9 | Birch Hill Nursery Ltd. | Brandt Tractor Ltd. | 12-03 | 1,500.00 |
+| BH-W12 | Birch Hill Nursery Ltd. | Harbourview Strata Corp. | 12-24 | 6,000.00 |
+| MR-W3 | Maple Ridge Landscaping Ltd. | Nutrien Ag Solutions | 10-22 | 6,000.00 |
+| MR-W8 | Maple Ridge Landscaping Ltd. | Telus Business | 11-26 | 3,000.00 |
+| MR-W10 | Maple Ridge Landscaping Ltd. | Oakview Senior Living | 12-10 | 5,000.00 |
+| CG-W7 | Cascade Garden Supply Inc. | Pacific Growers Supply LLC | 11-19 | 2,000.00 |
 
 Birch Hill's closing cash: W6 −3,000.00, W9 −4,500.00, W12 1,500.00. Its CASH-SHORT-01 item has
 one stretch, W6 to W11, lowest −4,500.00 in W9.
 
 **Expected**
 
+| Entity | Opening Cash | Week closes | Low Point |
+|---|---|---|---|
+| Birch Hill | 5,000.00 | W6 −3,000.00; W9 −4,500.00; W12 1,500.00 | −4,500.00 (W9) |
+| Maple Ridge | 30,000.00 | W3 24,000.00; W8 21,000.00; W10 26,000.00 | 21,000.00 (W8) |
+| Cascade | USD 9,000.00 | W7 USD 7,000.00 | USD 7,000.00 (W7) |
+
 | Entity | Decision Item | Subject | Acted on by | Evidence | Rules |
 |---|---|---|---|---|---|
 | Birch Hill | consider intercompany funding | Birch Hill's cash shortfall | owner | Maple Ridge could transfer 4,500.00 in W6. Caveats: characterise it as a loan, distribution or capital contribution; a loan needs documented terms, and arm's-length interest may apply; a distribution must pass the lender's solvency test; shareholder-loan rules can tax a loan to an individual owner; lender covenants may restrict it. | IC-FUND-01 (Q163) |
 
-**How the test comes out** (Q163: 4,500.00, the deepest shortfall, moved in W6, the first week
-of the shortfall).
-- **Maple Ridge qualifies.** Closing cash from W6 falls from 24,000.00 to 19,500.00, from W8 from
-  21,000.00 to 16,500.00, and from W10 from 26,000.00 to 21,500.00. Every week stays at or above
-  its 15,000.00 buffer.
-- **Cascade doesn't.** 4,500.00 is USD 3,308.82 at 1.3600. Cascade's W6 close would be
-  USD 5,691.18, above its buffer, but after W7 it would be USD 3,691.18, below USD 5,000.00.
+**How the test comes out** (Q163: deepest shortfall, moved in the first week of the shortfall;
+Evidence names the helper and amount).
+- **Maple Ridge qualifies.** After the suggested transfer, every week of its closes stays at or
+  above its buffer (Entity table is before the transfer; buffer is in Facts).
+- **Cascade doesn't.** Converted at the Group rate, the same transfer would leave Cascade below
+  its buffer after its next payment week.
 - **Nothing is forecast:** no Placement for the transfer, in either Entity.
 - **Provisional:** no.
 
@@ -273,7 +321,7 @@ of the shortfall).
 
 | Rule | Scenarios |
 |---|---|
-| IC-MAP-01 | S01–S07 (named), S03 (unnamed) |
+| IC-MAP-01 | S01, S03, S06; S03 also covers unnamed (Q162) |
 | IC-ELIM-01 | S01, S02, S06 |
 | IC-DOC-01 | S01, S03, S06 |
 | IC-DOC-02 | S01 |

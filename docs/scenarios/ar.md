@@ -56,10 +56,10 @@ include tax.
 | Placement | INV-1001 | W2 | 5,250.00 | due date | firm | AR-OPEN-01, AR-OPEN-04, AR-TIME-02 |
 | Exclusion | INV-1002 | — | 2,100.00 | not issued | — | AR-OPEN-02 |
 
-- **No history applies to INV-1001** (age −13). INV-1004 was already paid by age −13, so it is
-  not comparable. INV-1003 is voided and INV-1005 has a zero total, so both are ignored (Q145).
-  INV-1003 counted as paid on 09-25 (age +24) would wrongly place INV-1001 at 11-13 (W6).
-  INV-1005 is never a receivable and never a comparable invoice.
+- **No history applies to INV-1001** at its age on the run date. INV-1004 was already paid by
+  that age, so it is not comparable. INV-1003 is voided and INV-1005 has a zero total, so both
+  are ignored (Q145). Counting the void as a collection would place INV-1001 wrongly; INV-1005
+  is never a receivable and never a comparable invoice.
 - **No other outputs:** no Decision Items, and the run is not Provisional.
 
 ---
@@ -79,8 +79,8 @@ Concern: a person's stated expectation places an invoice; a passed one is not tr
 
 | Output | Invoice | Week | Amount | Basis / reason | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | INV-2001 | W4 | 3,150.00 | expected date | firm | AR-TIME-01 |
-| Exclusion | INV-2002 | — | 1,575.00 | no timing evidence | — | AR-TIME-04 |
+| Placement | INV-2001 | W4 | 3,150.00 | expected date | firm | AR-TIME-01, AR-OPEN-01, AR-OPEN-04 |
+| Exclusion | INV-2002 | — | 1,575.00 | no timing evidence | — | AR-TIME-04, AR-OPEN-01, AR-OPEN-04 |
 
 | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|
@@ -118,23 +118,23 @@ Open invoices:
 
 | Output | Invoice | Week | Amount | Basis | Median | Comparable | Confidence | Rules |
 |---|---|---|---|---|---|---|---|---|
-| Placement | INV-3003 | W1 (10-12) | 1,050.00 | Entity history | 5 days | 1 | estimated | AR-TIME-02 |
-| Placement | INV-3002 | W3 (10-22) | 2,625.00 | Entity history | 15 days | 4 | estimated | AR-TIME-02 |
-| Placement | INV-3001 | W6 (11-16) | 4,200.00 | Entity history | 40 days | 7 | estimated | AR-TIME-02 |
+| Placement | INV-3003 | W1 (10-12) | 1,050.00 | Entity history | 5 days | 1 | estimated | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
+| Placement | INV-3002 | W3 (10-22) | 2,625.00 | Entity history | 15 days | 4 | estimated | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
+| Placement | INV-3001 | W6 (11-16) | 4,200.00 | Entity history | 40 days | 7 | estimated | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
 
 | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|
 | collect | INV-3002 | owner | AR-COLLECT-01 (first) |
 | collect | INV-3003 | owner | AR-COLLECT-01 |
 
-**How the medians come out.** These use the reading in Q147.
-- **INV-3003 (age +35):** the comparable set, invoices unpaid at +35, is H-3105 alone, paid 5 days
-  later. Median 5 days, placed 10-12.
-- **INV-3002 (age +15):** the comparable set is H-3103, H-3104 and H-3105 (paid 5, 15 and 25
-  days later) plus INV-3003, still open, which counts as not collected. The first point at
-  which at least half (2 of 4) were collected is 15 days, so 10-22.
-- **INV-3001 (age −10):** all five H invoices (15, 20, 30, 40 and 50 days later) plus INV-3002
-  and INV-3003, still open. At least half (4 of 7) collected first at 40 days, so 11-16.
+**How the medians come out.** These use the reading in Q147. The Output table's Median,
+Comparable and Week columns are the gate; the working below is narrative only.
+- **INV-3003:** the comparable set is the one history invoice still unpaid at its age, paid a
+  few days later; median places it as in the Output table.
+- **INV-3002:** the comparable set mixes later-paid history with INV-3003 still open (not
+  collected); the first half-collected point places it as in the Output table.
+- **INV-3001:** every history invoice plus the two open ones; the first half-collected point
+  places it as in the Output table.
 
 - **Provisional:** no.
 
@@ -167,15 +167,15 @@ Open invoices:
 
 | Output | Invoice | Amount | Reason | Comparable | Rules |
 |---|---|---|---|---|---|
-| Exclusion | INV-4001 | 2,310.00 | history says uncollected | 3 (all never collected) | AR-TIME-03 |
+| Exclusion | INV-4001 | 2,310.00 | history says uncollected | 3 (all never collected) | AR-TIME-03, AR-OPEN-01, AR-OPEN-04 |
 
 | Decision Item | Subject | Acted on by | Draft Correction | Rules |
 |---|---|---|---|---|
 | collect | INV-4001 | owner | — | AR-COLLECT-01 |
 | review for write-off | INV-4001 | accountant | Credit note for 2,310.00 against INV-4001; **incomplete**: no bad-debt account mapped | AR-WRITEOFF-01 |
 
-- **Comparable set at +90:** H-4101 to H-4103, unpaid at +90 and never collected. H-4104 and
-  H-4105 were paid before +90.
+- **Comparable set:** the three Pinecrest history invoices, unpaid at INV-4001's age and never
+  collected. The Sandpiper invoices were paid before that age.
 - **Provisional:** no.
 
 ---
@@ -203,7 +203,7 @@ Open invoices:
 
 | Output | Invoice | Amount | Reason | Median | Comparable | Rules |
 |---|---|---|---|---|---|---|
-| Exclusion | INV-5001 | 2,400.00 | beyond horizon (2027-02-04) | 120 days | 3 | AR-TIME-03 |
+| Exclusion | INV-5001 | 2,400.00 | beyond horizon (2027-02-04) | 120 days | 3 | AR-TIME-03, AR-OPEN-01, AR-OPEN-04 |
 
 | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|
@@ -232,9 +232,9 @@ intercompany, naming Birch Hill. No paid history.
 
 | Output | Invoice | Week | Amount (CAD) | Basis / reason | Confidence | Recorded on Placement | Rules |
 |---|---|---|---|---|---|---|---|
-| Exclusion | INV-6001 | — | 2,000.00 | intercompany, see IC | — | — | AR-OPEN-03 |
-| Placement | INV-6002 | W3 | 1,360.00 | due date | firm | USD 1,000.00 at 1.3600 | AR-FX-01, AR-TIME-02 |
-| Placement | INV-6003 | W5 | 3,000.00 | due date | firm | — | AR-DISC-01, AR-TIME-02 |
+| Exclusion | INV-6001 | — | 2,000.00 | intercompany, see IC | — | — | AR-OPEN-03, AR-OPEN-01 |
+| Placement | INV-6002 | W3 | 1,360.00 | due date | firm | USD 1,000.00 at 1.3600 | AR-TIME-02, AR-OPEN-01, AR-OPEN-04, AR-FX-01 |
+| Placement | INV-6003 | W5 | 3,000.00 | due date | firm | — | AR-TIME-02, AR-OPEN-01, AR-OPEN-04, AR-DISC-01 |
 
 - **No other outputs:** no Decision Items, and the run is not Provisional.
 
@@ -265,8 +265,8 @@ Fernwood Café has no open invoices.
 
 | Output | Item | Week | Amount | Basis / reason | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | INV-7001 | W1 | 600.00 (1,000.00 less OP-7001 400.00) | due date | firm | AR-UNAPPLIED-01, AR-TIME-02 |
-| Placement | INV-7002 | W3 | 1,500.00 | due date | firm | AR-TIME-02 |
+| Placement | INV-7001 | W1 | 600.00 (1,000.00 less OP-7001 400.00) | due date | firm | AR-TIME-02, AR-OPEN-01, AR-OPEN-04, AR-UNAPPLIED-01 |
+| Placement | INV-7002 | W3 | 1,500.00 | due date | firm | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
 | Exclusion | CN-7101 | — | 300.00 | credit balance | — | AR-UNAPPLIED-02 |
 
 | Decision Item | Subject | Acted on by | Draft Correction | Rules |
@@ -302,18 +302,24 @@ No invoice to Northshore Rowing Club is dated after 09-01.
 
 | Output | Item | Week | Amount | Basis / reason | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | INV-8001 | W4 | 840.00 | due date | firm | AR-OPEN-01, AR-TIME-02 |
+| Placement | INV-8001 | W4 | 840.00 | due date | firm | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
 | Exclusion | T1 occurrence 10-15 | — | 840.00 | covered by INV-8001 | — | AR-SCHED-01 |
 | Placement | T1 occurrence 11-15 | W8 (due 11-30) | 840.00 | scheduled invoice | estimated | AR-SCHED-01 |
 | Placement | T1 occurrence 12-15 | W13 (due 12-30) | 840.00 | scheduled invoice | estimated | AR-SCHED-01 |
 | Exclusion | T2 | — | — | template not automatic | — | AR-SCHED-01 |
 
+| Week | Opens | Receipts | Payments | Closes | Firm | Estimated |
+|---|---|---|---|---|---|---|
+| W4 | 0.00 | 840.00 | — | 840.00 | 100% | 0% |
+| W8 | 840.00 | 840.00 | — | 1,680.00 | 0% | 100% |
+| W13 | 1,680.00 | 840.00 | — | 2,520.00 | 0% | 100% |
+
 | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|
 | invoice missed | T2, occurrence 10-01 | bookkeeper | AR-SCHED-02 |
 
-- **T1's first occurrence is 10-15,** so it has no past occurrence to be missed.
-- **T1's 2027-01-15 occurrence** falls after the horizon.
+- **T1's first occurrence** is its Starting date, so it has no past occurrence to be missed.
+- **T1's next occurrence after the horizon** is not placed.
 - **Provisional:** no.
 
 ---
@@ -341,8 +347,8 @@ Account balances at the end of the last completed month:
 
 | Output | Invoice | Week | Amount | Basis | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | INV-9001 | W2 | 6,000.00 | due date | firm | AR-TIME-02 |
-| Placement | INV-9002 | W3 | 6,000.00 | due date | firm | AR-TIME-02 |
+| Placement | INV-9001 | W2 | 6,000.00 | due date | firm | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
+| Placement | INV-9002 | W3 | 6,000.00 | due date | firm | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
 
 | Decision Item | Subject | Acted on by | Evidence | Rules |
 |---|---|---|---|---|
@@ -375,8 +381,8 @@ Customer credit, none of it applied to anything:
 
 | Output | Item | Week | Amount | Basis / reason | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Exclusion | INV-10001 | — | 700.00 | offset by credit (CN-10101) | — | AR-UNAPPLIED-01 (Q148) |
-| Placement | INV-10002 | W3 | 900.00 (1,200.00 less CN-10101's remaining 300.00) | due date | firm | AR-UNAPPLIED-01, AR-TIME-02 |
+| Exclusion | INV-10001 | — | 700.00 | offset by credit (CN-10101) | — | AR-UNAPPLIED-01, AR-OPEN-01 (Q148) |
+| Placement | INV-10002 | W3 | 900.00 (1,200.00 less CN-10101's remaining 300.00) | due date | firm | AR-TIME-02, AR-OPEN-01, AR-OPEN-04, AR-UNAPPLIED-01 |
 
 | Decision Item | Subject | Acted on by | Draft Correction | Rules |
 |---|---|---|---|---|
@@ -419,12 +425,12 @@ No invoice is linked to T1, and none to Granite Peak Fitness is dated after 08-0
 | Exclusion | T1 occurrence 12-20 | — | 1,000.00 | beyond horizon (2027-01-29) | 40 days | 4 | — | AR-SCHED-01, AR-TIME-03 (Q151) |
 
 **How the median comes out.** Each occurrence is taken as open on its scheduled invoice date, at
-age −30. All four H invoices were unpaid at −30 and were collected 35, 40, 50 and 50 days later.
-At least half (2 of 4) were collected first at 40 days (Q147), so each occurrence is placed 40 days
-after its invoice date.
-- **With no history** (AR-S08), the occurrences would be placed at their due dates: 11-19 (W7),
-  12-20 (W11), and 2027-01-19, after the horizon.
-- **No Decision Items:** T1's first date is 10-20, so no past occurrence can be missed.
+the age that net-30 terms imply before due. All four H invoices were unpaid at that age; the first
+half-collected point (Q147) is the Median column on the Output table, and each occurrence is
+placed that many days after its invoice date.
+- **With no history** (AR-S08), the occurrences would be placed at their due dates instead, with
+  the last one after the horizon.
+- **No Decision Items:** T1's first date is its Starting date, so no past occurrence can be missed.
 - **Provisional:** no.
 
 ---

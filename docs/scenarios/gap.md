@@ -1,8 +1,9 @@
 # GAP Scenarios
 
-Status: **approved by the owner** (2026-09-14). Nothing here is built. GAP-S06 and GAP-S07 are
-built alongside CASH-S03, which the CASH build left pending because all three need GAP-TAX-01
-(Q275).
+Status: **approved by the owner** (2026-09-14). Built: each Scenario here is a test in
+`scenarios/tests/gap.rs`, and `tools/mutate.py gap` sweeps this document for figures a test
+would not catch. This document is fixed input: when a test disagrees with it, the code is wrong
+(`README.md`).
 
 Each Scenario is a named general accounting concern, described as Canonical Facts and Settings,
 with the outputs the GAP Rules must produce (ADR-0010, ADR-0016). Together these exercise every
@@ -34,10 +35,10 @@ from the owner's schedule, and not again once the ledger shows them.
 
 | Obligation | Payee | Amount | Frequency | Next date | End date |
 |---|---|---|---|---|---|
-| O1 rent | Fraser Valley Properties Ltd. | 4,200.00 | monthly | 11-01 | none |
-| O2 insurance | Intact Insurance | 385.00 | monthly | 10-20 | 11-20 |
-| O3 Microsoft 365 | Microsoft Canada | 96.00 | monthly | 10-10 | none |
-| O4 equipment loan | Kubota Credit Corporation Canada | 1,850.00 | monthly | 10-09 | none |
+| O1 | Fraser Valley Properties Ltd. | 4,200.00 | monthly | 11-01 | none |
+| O2 | Intact Insurance | 385.00 | monthly | 10-20 | 11-20 |
+| O3 | Microsoft Canada | 96.00 | monthly | 10-10 | none |
+| O4 | Kubota Credit Corporation Canada | 1,850.00 | monthly | 10-09 | none |
 
 Documents and transactions:
 - **Bill FVP-1101:** Fraser Valley Properties Ltd., November rent, dated 10-28, due 11-01,
@@ -54,23 +55,24 @@ Documents and transactions:
 | Exclusion | O1 occurrence 11-01 | — | 4,200.00 | covered by FVP-1101 | — | GAP-SCHED-02 |
 | Placement | O1 occurrence 12-01 | W8 | 4,200.00 | scheduled obligation | firm | GAP-SCHED-01 |
 | Placement | O1 occurrence 2027-01-01 | W13 | 4,200.00 | scheduled obligation | firm | GAP-SCHED-01 |
-| Placement | O2 occurrence 10-20 | W2 | 385.00 | scheduled obligation | firm | GAP-SCHED-01, GAP-SCHED-02 |
+| Placement | O2 occurrence 10-20 | W2 | 385.00 | scheduled obligation | firm | GAP-SCHED-01 |
 | Placement | O2 occurrence 11-20 | W7 | 385.00 | scheduled obligation | firm | GAP-SCHED-01 |
 | Exclusion | O3 occurrence 10-10 | — | 96.00 | covered by card charge 10-06 | — | GAP-SCHED-02 |
 | Placement | O3 occurrence 11-10 | W5 | 96.00 | scheduled obligation | firm | GAP-SCHED-01 |
 | Placement | O3 occurrence 12-10 | W10 | 96.00 | scheduled obligation | firm | GAP-SCHED-01 |
-| Placement | O4 occurrence 10-09 | W1 | 1,850.00 | scheduled obligation | firm | GAP-SCHED-01, GAP-SCHED-02 |
+| Placement | O4 occurrence 10-09 | W1 | 1,850.00 | scheduled obligation | firm | GAP-SCHED-01 |
 | Placement | O4 occurrence 11-09 | W5 | 1,850.00 | scheduled obligation | firm | GAP-SCHED-01 |
 | Placement | O4 occurrence 12-09 | W10 | 1,850.00 | scheduled obligation | firm | GAP-SCHED-01 |
 
 - **Coverage (Q149, Q118):**
-  - **FVP-1101** (10-28) is nearer 11-01 than 10-01, so it covers 11-01. AP pays it.
-  - **The 10-05 Intact spend** is exactly halfway between 09-20 and 10-20, so it covers the
-    earlier occurrence, 09-20, which is before the run date. O2's 10-20 occurrence stays.
-  - **The 10-06 Microsoft charge** covers 10-10 though the amount differs: the actual replaces
-    the estimate.
-  - **The 10-06 spend with no payee** can't cover O4's 10-09 occurrence, so that occurrence is
-    still forecast. This overstates outflows rather than understating them.
+  - **FVP-1101** is nearer the November occurrence than the October one, so it covers November.
+    AP pays it.
+  - **The Intact spend** is exactly halfway between two O2 occurrences, so it covers the earlier
+    one, which is before the run date. O2's later occurrence stays.
+  - **The Microsoft charge** covers the October O3 occurrence though the amount differs: the
+    actual replaces the estimate.
+  - **The spend with no payee** can't cover O4's October occurrence, so that occurrence is still
+    forecast. This overstates outflows rather than understating them.
 - **No Decision Items, not Provisional.**
 
 ---
@@ -98,7 +100,7 @@ day; a balance with neither is excluded, and the run says it is incomplete.
 | Placement | Kubota Equipment Lease 11-16 | W6 | 1,280.00 | scheduled obligation | firm | GAP-SCHED-01 |
 | Placement | Kubota Equipment Lease 12-16 | W11 | 1,280.00 | scheduled obligation | firm | GAP-SCHED-01 |
 | Placement | RBC Visa Business | W3 (10-22) | 3,480.00 | card balance | firm | GAP-CARD-01 |
-| Exclusion | Amex Business Gold | — | 1,960.00 | no card payment day | — | GAP-CARD-01 |
+| Exclusion | Amex Business Gold | — | 1,960.00 | no payment day | — | GAP-CARD-01 |
 
 | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|
@@ -121,11 +123,14 @@ already booked come from the liability, later ones from the expected amount.
   expected remittance 7,600.00 per run, paid through Wagepoint.
 - **Remitter type:** regular (15th of the month after pay) `[gap: Part 1]`.
 
-Ledger:
-- **"Payroll Liabilities"** (payroll liability): balance at 09-30 15,200.00, for September's two
-  runs.
-- **Bank spend 10-02:** 5,000.00 to Receiver General for Canada (government trust).
-- **Bank spend 10-07:** 18,212.55 to Wagepoint.
+| Account | Classification | As of | Balance |
+|---|---|---|---|
+| Payroll Liabilities | payroll liability | 09-30 | 15,200.00 |
+
+| Transaction | Account | Payee | Dated | Amount |
+|---|---|---|---|---|
+| BANK-RG-1002 | Business Chequing | Receiver General for Canada | 10-02 | 5,000.00 |
+| BANK-WP-1007 | Business Chequing | Wagepoint | 10-07 | 18,212.55 |
 
 **Expected**
 
@@ -142,10 +147,11 @@ Ledger:
 | Placement | Remittance for October (runs 10-08, 10-22), due 11-15, moved to 11-16 | W6 | 15,200.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
 | Placement | Remittance for November (runs 11-05, 11-19), due 12-15 | W10 | 15,200.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
 
-- **September:** 15,200.00 booked at 09-30, less the 5,000.00 remitted 10-02.
-- **October's remittance counts both runs,** including the 10-08 run already paid through
-  Wagepoint: covering net pay doesn't cover its deductions.
-- **December's runs** are remitted 2027-01-15, after the horizon.
+- **September:** booked liability at month-end, less what was remitted after month-end; the
+  Output table carries the net.
+- **October's remittance counts both runs,** including the run already paid through Wagepoint:
+  covering net pay doesn't cover its deductions.
+- **December's runs** are remitted after the horizon.
 - **No Decision Items, not Provisional.**
 
 ---
@@ -158,8 +164,16 @@ Concern: an Entity that clearly runs payroll is never forecast as if it didn't.
 - **Birch Hill Nursery Ltd.:** "Wages and Salaries" (wages) has 14,000.00 of September activity.
   No payroll schedule.
 - **Maple Ridge Landscaping Ltd.:** payroll schedule monthly, next pay date 10-30, expected net
-  pay 9,800.00, expected remittance 3,900.00 per run. No remitter type. "Payroll Liabilities"
-  balance at 09-30 0.00.
+  pay 9,800.00, expected remittance 3,900.00 per run. No remitter type.
+
+| Entity | Account | Classification |
+|---|---|---|
+| Birch Hill Nursery Ltd. | Wages and Salaries | wages |
+| Maple Ridge Landscaping Ltd. | Payroll Liabilities | payroll liability |
+
+| Account | Classification | As of | Balance |
+|---|---|---|---|
+| Payroll Liabilities | payroll liability | 09-30 | 0.00 |
 
 **Expected**
 
@@ -187,29 +201,38 @@ Concern: when the owner hasn't said what a future remittance will be, the Entity
 remittance is the estimate; with no remittance history, the amount is not guessed.
 
 **Facts.** Both Entities: payroll schedule monthly, next pay date 10-30, no expected remittance;
-remitter type regular.
+remitter type regular. Maple Ridge expected net pay 9,800.00; Birch Hill 6,200.00 (first payroll
+in October). Maple Ridge remitted 3,950.00 on 09-15 for August.
 
-| Entity | Net pay | "Payroll Liabilities" at 09-30 | Remittances |
-|---|---|---|---|
-| Maple Ridge Landscaping Ltd. | 9,800.00 | 4,100.00 (September) | 09-15, 3,950.00 to Receiver General for Canada, for August |
-| Birch Hill Nursery Ltd. | 6,200.00 | 0.00 (first payroll in October) | none |
+| Entity | Account | Classification | As of | Balance |
+|---|---|---|---|---|
+| Maple Ridge Landscaping Ltd. | Payroll Liabilities | payroll liability | 09-30 | 4,100.00 |
+| Birch Hill Nursery Ltd. | Payroll Liabilities | payroll liability | 09-30 | 0.00 |
+
+| Transaction | Account | Payee | Dated | Amount |
+|---|---|---|---|---|
+| BANK-RG-0915 | Business Chequing | Receiver General for Canada | 09-15 | 3,950.00 |
 
 **Expected**
 
 | Entity | Output | Item | Week | Amount | Basis / reason | Confidence | Rules |
 |---|---|---|---|---|---|---|---|
-| Maple Ridge | Placement | Net pay 10-30, 11-30, 12-30 | W4, W8, W13 | 9,800.00 each | payroll schedule | firm | GAP-PAYROLL-01 |
+| Maple Ridge | Placement | Net pay 10-30 | W4 | 9,800.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Maple Ridge | Placement | Net pay 11-30 | W8 | 9,800.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Maple Ridge | Placement | Net pay 12-30 | W13 | 9,800.00 | payroll schedule | firm | GAP-PAYROLL-01 |
 | Maple Ridge | Placement | Remittance for September, due 10-15 | W2 | 4,100.00 | booked liability | firm, trust | GAP-PAYROLL-03 |
-| Maple Ridge | Placement | Remittance for October, due 11-16 | W6 | 3,950.00 | last remittance | estimated, trust | GAP-PAYROLL-03 |
+| Maple Ridge | Placement | Remittance for October, due 11-15, moved to 11-16 | W6 | 3,950.00 | last remittance | estimated, trust | GAP-PAYROLL-03 |
 | Maple Ridge | Placement | Remittance for November, due 12-15 | W10 | 3,950.00 | last remittance | estimated, trust | GAP-PAYROLL-03 |
-| Birch Hill | Placement | Net pay 10-30, 11-30, 12-30 | W4, W8, W13 | 6,200.00 each | payroll schedule | firm | GAP-PAYROLL-01 |
+| Birch Hill | Placement | Net pay 10-30 | W4 | 6,200.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Birch Hill | Placement | Net pay 11-30 | W8 | 6,200.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Birch Hill | Placement | Net pay 12-30 | W13 | 6,200.00 | payroll schedule | firm | GAP-PAYROLL-01 |
 | Birch Hill | Exclusion | Remittances for October (due 11-16) and November (due 12-15) | — | — | remittance amount unknown | — | GAP-PAYROLL-03 |
 
 | Entity | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|---|
 | Birch Hill | payroll remittance amount unknown | Birch Hill Nursery Ltd., remittances due 11-16 and 12-15 | owner | GAP-PAYROLL-03 (Q158) |
 
-- **Birch Hill's September balance is zero,** so nothing is due 10-15.
+- **Birch Hill's September balance is zero,** so nothing is due for that month.
 - **One item for Birch Hill, not two:** entering an expected remittance fixes both (Q158).
 - **Provisional:** yes. Reason: GAP-PAYROLL-03 on Birch Hill.
 
@@ -220,12 +243,19 @@ remitter type regular.
 Concern: tax already collected is remitted from the booked liability, a period still running is
 estimated from the last remittance, and a refund is never forecast as cash.
 
-**Facts.** The Group holds two Entities.
-- **Maple Ridge Landscaping Ltd.:** GST/HST reporting period monthly (set). "GST/HST Payable"
-  (sales-tax liability, government trust) balance at 09-30 2,150.00, for September. August's
-  remittance, 1,980.00, was paid 09-29. No payment since.
-- **Birch Hill Nursery Ltd.:** reporting period quarterly (set). "GST/HST Payable" has a debit
-  balance of 1,240.00 at 09-30, for July to September. No remittance history.
+**Facts.** The Group holds two Entities. Tax accounting scheme is unset on both (Q284 Pick A).
+- **Maple Ridge Landscaping Ltd.:** GST/HST reporting period monthly (set). August's remittance
+  was paid 09-29. No payment since.
+- **Birch Hill Nursery Ltd.:** reporting period quarterly (set). No remittance history.
+
+| Entity | Account | Classification | As of | Balance |
+|---|---|---|---|---|
+| Maple Ridge Landscaping Ltd. | GST/HST Payable | sales-tax liability | 09-30 | 2,150.00 |
+| Birch Hill Nursery Ltd. | GST/HST Payable | sales-tax liability | 09-30 | −1,240.00 |
+
+| Entity | Transaction | Account | Kind | Dated | Amount |
+|---|---|---|---|---|---|
+| Maple Ridge Landscaping Ltd. | TAX-AUG | Business Chequing | tax remittance | 09-29 | 1,980.00 |
 
 **Expected**
 
@@ -242,7 +272,7 @@ estimated from the last remittance, and a refund is never forecast as cash.
 
 - **Due dates:** one month after each monthly or quarterly period `[gap: Part 2]`.
 - **Remittances due after the horizon are not estimated** (Q159): Maple Ridge's December and
-  Birch Hill's October to December remittances fall due 2027-02-01. So Birch Hill's lack of
+  Birch Hill's October to December remittances fall after the horizon. So Birch Hill's lack of
   history raises nothing yet.
 - **Provisional:** no.
 
@@ -253,13 +283,19 @@ estimated from the last remittance, and a refund is never forecast as cash.
 Concern: which schedule applies is the authority's decision; a value in the ledger is used but
 confirmed, no value at all is not guessed, and a jurisdiction with no calendar is never skipped.
 
-**Facts.** The Group holds two Entities.
+**Facts.** The Group holds two Entities. Tax accounting scheme Setting is unset on both.
 - **Maple Ridge Landscaping Ltd.** (Xero): no reporting period Setting; Xero's `SalesTaxPeriod`
-  is `3MONTHLY`, periods ending March, June, September and December. "GST/HST Payable" balance at
-  09-30 5,400.00, no payment since. It also collects British Columbia PST: "PST Payable" (sales-tax
-  liability, government trust, jurisdiction British Columbia) balance at 09-30 1,800.00.
-- **Birch Hill Nursery Ltd.** (QBO): no reporting period Setting, and none in the ledger.
-  "GST/HST Payable" balance at 09-30 3,100.00.
+  is `3MONTHLY`, periods ending March, June, September and December. Xero's `SalesTaxBasis` is
+  `ACCRUALS` (standard), used unconfirmed (Q253). No payment since. PST jurisdiction British
+  Columbia.
+- **Birch Hill Nursery Ltd.** (QBO): no reporting period Setting, and none in the ledger. No
+  ledger-held tax basis (Q284 Pick A).
+
+| Entity | Account | Classification | As of | Balance |
+|---|---|---|---|---|
+| Maple Ridge Landscaping Ltd. | GST/HST Payable | sales-tax liability | 09-30 | 5,400.00 |
+| Maple Ridge Landscaping Ltd. | PST Payable | sales-tax liability | 09-30 | 1,800.00 |
+| Birch Hill Nursery Ltd. | GST/HST Payable | sales-tax liability | 09-30 | 3,100.00 |
 
 **Expected**
 
@@ -272,13 +308,16 @@ confirmed, no value at all is not guessed, and a jurisdiction with no calendar i
 | Entity | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|---|
 | Maple Ridge | confirm sales tax period | GST/HST, quarterly from the ledger | accountant | GAP-TAX-03 |
+| Maple Ridge | confirm tax accounting scheme | GST/HST | accountant | GAP-TAX-01 |
 | Maple Ridge | unsupported tax jurisdiction | British Columbia PST | accountant | GAP-TAX-04 |
 | Birch Hill | set sales tax period | GST/HST | accountant | GAP-TAX-03 |
 
-- **Maple Ridge's GST/HST is estimated** only because its timing rests on an unconfirmed ledger
-  value; the amount is booked.
+- **Maple Ridge's GST/HST is estimated** because its timing rests on an unconfirmed ledger period
+  and its scheme on an unconfirmed ledger basis (Q253); the amount is booked. Blank scheme with
+  no ledger basis alone does not soften a remittance (Q284 Pick A — Birch Hill's path if it had
+  a period).
 - **Provisional:** yes. Reasons: GAP-TAX-04 on Maple Ridge (British Columbia PST); GAP-TAX-03 on
-  Birch Hill. Maple Ridge's unconfirmed period is not a reason.
+  Birch Hill. Maple Ridge's unconfirmed period and scheme are not reasons.
 
 ---
 
@@ -292,6 +331,10 @@ and a booked balance for a finished year is paid when it falls due.
 - **Birch Hill Nursery Ltd.:** tax-year start 09-01, so its last year ended 08-31. No instalments
   entered. "Income Tax Payable" (income tax payable) balance at 08-31 7,200.00 for that year, no
   payment since. Whether it qualifies for the 3-month balance-due date is not set.
+
+| Entity | Account | Classification | As of | Balance |
+|---|---|---|---|---|
+| Birch Hill Nursery Ltd. | Income Tax Payable | income tax payable | 08-31 | 7,200.00 |
 
 **Expected**
 
@@ -308,8 +351,8 @@ and a booked balance for a finished year is paid when it falls due.
 
 - **Instalment dates:** one month less a day from the tax-year start, then the same day each
   month, so the last day of each month here `[gap: Part 3]`.
-- **Birch Hill's balance is placed at the earlier date,** 2 months after year-end, until someone
-  confirms whether 3 months applies (Q160).
+- **Birch Hill's balance is placed at the earlier date,** months after year-end as the Output
+  table shows, until someone confirms whether the longer extension applies (Q160).
 - **Birch Hill has no instalments entered,** so none are forecast and no item asks for them.
 - **Provisional:** no.
 
@@ -340,8 +383,141 @@ when someone who knows says so, and not guessed otherwise.
 |---|---|---|---|
 | when will this accrual be paid | Accrued Professional Fees | accountant | GAP-ACCRUAL-01 |
 
-- **"15 days after month-end"** counts from the last completed month-end, 09-30.
+- **"15 days after month-end"** counts from the last completed month-end.
 - **Provisional:** yes. Reason: GAP-ACCRUAL-01 on Accrued Professional Fees.
+
+---
+
+## GAP-S10 — Accelerated threshold 1 (half-month remittance periods)
+
+Concern: when CRA assigns Accelerated threshold 1, remittances cover 1st–15th and 16th–end, not
+the whole calendar month, and due dates are the 25th / 10th (moved for weekends and CRA holidays).
+
+**Facts.** Settings:
+- **Payroll schedule:** biweekly, next pay date 10-08 (Thursday), expected net pay 18,400.00,
+  expected remittance 7,600.00 per run, paid through Wagepoint.
+- **Remitter type:** Accelerated threshold 1 `[gap: Part 1]`.
+
+| Account | Classification | As of | Balance |
+|---|---|---|---|
+| Payroll Liabilities | payroll liability | 09-30 | 15,200.00 |
+
+| Transaction | Account | Payee | Dated | Amount |
+|---|---|---|---|---|
+| BANK-RG-1002 | Business Chequing | Receiver General for Canada | 10-02 | 5,000.00 |
+| BANK-WP-1007 | Business Chequing | Wagepoint | 10-07 | 18,212.55 |
+
+**Expected**
+
+| Output | Item | Week | Amount | Basis / reason | Confidence | Rules |
+|---|---|---|---|---|---|---|
+| Exclusion | Net pay 10-08 | — | 18,400.00 | covered by Wagepoint spend 10-07 | — | GAP-PAYROLL-01, GAP-SCHED-02 |
+| Placement | Net pay 10-22 | W3 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 11-05 | W5 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 11-19 | W7 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 12-03 | W9 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 12-17 | W11 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 12-31 | W13 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Remittance for 16–30 September, due 10-10, moved to 10-13 | W1 | 10,200.00 | booked liability | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 1–15 October (runs 10-08), due 10-25, moved to 10-26 | W3 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 16–31 October (runs 10-22), due 11-10 | W5 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 1–15 November (runs 11-05), due 11-25 | W8 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 16–30 November (runs 11-19), due 12-10 | W10 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 1–15 December (runs 12-03), due 12-25, moved to 12-28 | W12 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+
+- **September’s second half** is the ended band that owns the month-end liability (booked less
+  remitted after month-end). Statutory due falls on a Saturday; Thanksgiving moves cash as in the
+  Output table.
+- **Each half-month band with a pay run** remits the per-run amount in Facts. The December second
+  half is due after the horizon.
+- **No Decision Items, not Provisional.**
+
+---
+
+## GAP-S11 — Accelerated threshold 2 (weekly remittance bands)
+
+Concern: Accelerated threshold 2 remits four times a month; each band ends on the 7th, 14th,
+21st or month-end and is due the third working day after that end.
+
+**Facts.** Settings:
+- **Payroll schedule:** biweekly, next pay date 10-08 (Thursday), expected net pay 18,400.00,
+  expected remittance 7,600.00 per run, paid through Wagepoint.
+- **Remitter type:** Accelerated threshold 2 `[gap: Part 1]`.
+
+| Account | Classification | As of | Balance |
+|---|---|---|---|
+| Payroll Liabilities | payroll liability | 09-30 | 15,200.00 |
+
+| Transaction | Account | Payee | Dated | Amount |
+|---|---|---|---|---|
+| BANK-RG-1002 | Business Chequing | Receiver General for Canada | 10-02 | 5,000.00 |
+| BANK-WP-1007 | Business Chequing | Wagepoint | 10-07 | 18,212.55 |
+
+**Expected**
+
+| Output | Item | Week | Amount | Basis / reason | Confidence | Rules |
+|---|---|---|---|---|---|---|
+| Exclusion | Net pay 10-08 | — | 18,400.00 | covered by Wagepoint spend 10-07 | — | GAP-PAYROLL-01, GAP-SCHED-02 |
+| Placement | Net pay 10-22 | W3 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 11-05 | W5 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 11-19 | W7 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 12-03 | W9 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 12-17 | W11 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 12-31 | W13 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Remittance for 22–30 September, due 10-05 | W1 | 10,200.00 | booked liability | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 8–14 October (runs 10-08), due 10-19 | W2 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 22–31 October (runs 10-22), due 11-04 | W5 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 1–7 November (runs 11-05), due 11-12 | W6 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 15–21 November (runs 11-19), due 11-25 | W8 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 1–7 December (runs 12-03), due 12-10 | W10 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+| Placement | Remittance for 15–21 December (runs 12-17), due 12-24 | W12 | 7,600.00 | payroll schedule | firm, trust | GAP-PAYROLL-03 |
+
+- **September’s last band** owns the booked liability (same net as the Output remittance row);
+  due is already a working-day count, so no separate “moved to”.
+- **Bands with no pay run** produce no remittance.
+- **December’s last band** is due the third working day after month-end; with New Year’s Day on
+  the holiday list that falls after the horizon.
+- **No Decision Items, not Provisional.**
+
+---
+
+## GAP-S12 — Quarterly remitter
+
+Concern: a small-employer quarterly remitter remits once per calendar quarter, due the 15th of
+the month after quarter-end (15 Apr / Jul / Oct / Jan), moved for weekends and CRA holidays.
+
+**Facts.** Settings:
+- **Payroll schedule:** biweekly, next pay date 10-08 (Thursday), expected net pay 18,400.00,
+  expected remittance 7,600.00 per run, paid through Wagepoint.
+- **Remitter type:** Quarterly `[gap: Part 1]`.
+
+| Account | Classification | As of | Balance |
+|---|---|---|---|
+| Payroll Liabilities | payroll liability | 09-30 | 15,200.00 |
+
+| Transaction | Account | Payee | Dated | Amount |
+|---|---|---|---|---|
+| BANK-RG-1002 | Business Chequing | Receiver General for Canada | 10-02 | 5,000.00 |
+| BANK-WP-1007 | Business Chequing | Wagepoint | 10-07 | 18,212.55 |
+
+**Expected**
+
+| Output | Item | Week | Amount | Basis / reason | Confidence | Rules |
+|---|---|---|---|---|---|---|
+| Exclusion | Net pay 10-08 | — | 18,400.00 | covered by Wagepoint spend 10-07 | — | GAP-PAYROLL-01, GAP-SCHED-02 |
+| Placement | Net pay 10-22 | W3 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 11-05 | W5 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 11-19 | W7 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 12-03 | W9 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 12-17 | W11 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Net pay 12-31 | W13 | 18,400.00 | payroll schedule | firm | GAP-PAYROLL-01 |
+| Placement | Remittance for July–September, due 10-15 | W2 | 10,200.00 | booked liability | firm, trust | GAP-PAYROLL-03 |
+
+- **Q3 (July–September)** is the ended quarter that owns the month-end liability (booked less
+  remitted after month-end). Due falls in the horizon as in the Output table.
+- **Q4 (October–December)** — every pay run in the horizon — remits after the horizon, so no
+  estimated remittance rows (same posture as S03’s December under Regular / Q159).
+- **No Decision Items, not Provisional.**
 
 ---
 
@@ -350,11 +526,11 @@ when someone who knows says so, and not guessed otherwise.
 | Rule | Scenarios |
 |---|---|
 | GAP-SCHED-01 | S01, S02 |
-| GAP-SCHED-02 | S01, S03 |
+| GAP-SCHED-02 | S01, S03, S10, S11, S12 |
 | GAP-LOAN-01 | S02 |
-| GAP-PAYROLL-01 | S03, S04, S05 |
+| GAP-PAYROLL-01 | S03, S04, S05, S10, S11, S12 |
 | GAP-PAYROLL-02 | S04 |
-| GAP-PAYROLL-03 | S03, S05 |
+| GAP-PAYROLL-03 | S03, S05, S10, S11, S12 |
 | GAP-PAYROLL-04 | S04 |
 | GAP-TAX-01 | S06, S07 |
 | GAP-TAX-02 | S06 |

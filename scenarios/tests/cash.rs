@@ -86,6 +86,62 @@ fn cash_s02_undrawn_credit_is_headroom_never_cash() {
 }
 
 #[test]
+fn cash_s03_two_stretches_below_zero_make_one_shortfall_item() {
+    use cashsaas_core::settings::SalesTaxReportingPeriod;
+
+    let mut scenario = Scenario::new("CASH-S03");
+    scenario.entity("Maple Ridge Landscaping Ltd.", "CAD");
+    scenario.lock_date("09-30");
+    scenario.map_account("RBC Business Chequing", AccountClass::Bank);
+    scenario.balance("RBC Business Chequing", "10-07", "6,000.00");
+    scenario.map_account("BDC Operating Line", AccountClass::CreditLine);
+    scenario.balance("BDC Operating Line", "10-07", "0.00");
+    scenario.credit_line_limit("BDC Operating Line", "25,000.00");
+    scenario
+        .bill("BT-3301", "Brandt Tractor Ltd.")
+        .due("10-16")
+        .total("9,500.00")
+        .add();
+    scenario
+        .bill("ST-3302", "Stihl Canada")
+        .due("12-04")
+        .total("12,000.00")
+        .add();
+    scenario
+        .invoice("INV-3101", "Harbourview Strata Corp.")
+        .due("10-28")
+        .total("7,000.00")
+        .add();
+    scenario
+        .invoice("INV-3102", "Alder Creek Homes")
+        .due("11-06")
+        .total("5,000.00")
+        .add();
+    scenario
+        .invoice("INV-3103", "Kingsway Medical Clinic")
+        .due("12-18")
+        .total("9,000.00")
+        .add();
+    scenario.map_account("GST/HST Payable", AccountClass::SalesTaxLiability);
+    scenario.balance("GST/HST Payable", "09-30", "4,200.00");
+    scenario.sales_tax_period(SalesTaxReportingPeriod::Quarterly);
+    scenario.tax_remittance("TAX-Q1", "RBC Business Chequing", "07-31", "3,900.00");
+    let run = scenario.run();
+    check(
+        &scenario,
+        &run,
+        DOC,
+        &[
+            "CASH-OPEN-01",
+            "CASH-HEAD-01",
+            "CASH-ROLL-01",
+            "CASH-LOW-01",
+            "CASH-SHORT-01",
+        ],
+    );
+}
+
+#[test]
 fn cash_s07_confidence_by_size_and_what_makes_a_run_provisional() {
     let mut scenario = Scenario::new("CASH-S07");
     scenario.entity("Maple Ridge Landscaping Ltd.", "CAD");

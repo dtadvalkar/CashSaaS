@@ -1,9 +1,10 @@
 # CASH — Forecast position, weeks and cash findings
 
-Status: **approved by the owner** (2026-09-14). Being built: `core/src/cash.rs`, Scenario by
-Scenario, with coverage gated against the table in `docs/scenarios/cash.md`; the run log is
-`docs/plans/cash-build-log.md`. CASH-OPEN-01 and CASH-ROLL-01 were built a Family early because
-AP-DISC-02 reads them (Q265), and this build rewrites them in place.
+Status: **approved by the owner** (2026-09-14). Built: every Rule here is implemented in
+`core/src/cash.rs` and covered by a Scenario test, with coverage gated against the table in
+`docs/scenarios/cash.md` (`scenarios/tests/coverage.rs`). CASH-OPEN-01 and CASH-ROLL-01 were
+built a Family early because AP-DISC-02 reads them (Q265); this Family rewrote them in place.
+CASH-S03 was built at GAP Checkpoint C because it needs GAP-TAX-01 (Q275).
 
 What this Family does: starts each Entity's forecast from its Opening Cash, rolls every other
 Family's Placements through the weeks, measures Confidence, finds the Low Point, raises cash
@@ -218,8 +219,9 @@ Decided by the owner on 2026-09-13 and 2026-09-14.
 - **Scope:** Universal · **Status:** active
 - **Statement:** When any week's closing cash falls below zero, the Entity has one open "cash
   shortfall" Decision Item. Its evidence lists each continuous stretch below zero (first week,
-  last week, lowest closing cash) and the Headroom available. It is due at the start of the
-  first stretch. If the run is Provisional, the item says so and lists the blocking items.
+  last week, lowest closing cash) and the Headroom available. Each stretch also lists the trust
+  obligations falling inside it, named with their amount and placed week. It is due at the start
+  of the first stretch. If the run is Provisional, the item says so and lists the blocking items.
 - **Justification:** Running out of cash matters for every business, so no Setting is needed
   (Q91). Identifying the item by kind alone keeps the owner's status across daily runs whose
   week dates shift (Q95; design-session-2026-09-11 Q31). Naming Headroom turns "you run out"

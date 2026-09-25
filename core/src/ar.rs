@@ -560,6 +560,7 @@ fn schedules(
             run.decision_items.push(item(
                 ItemKind::InvoiceMissed,
                 Subject::Occurrence {
+                    entity: template.id.entity.clone(),
                     template: template.id.clone(),
                     date: on,
                 },
@@ -583,6 +584,7 @@ fn schedules(
             occurrence(template.start, template.frequency, k).filter(|on| *on < end && within(*on))
         {
             let subject = Subject::Occurrence {
+                entity: template.id.entity.clone(),
                 template: template.id.clone(),
                 date: on,
             };

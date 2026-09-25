@@ -9,6 +9,7 @@ use rust_decimal::Decimal;
 use crate::facts::{EntityId, FactId, Facts, Frequency};
 use crate::forecast::Horizon;
 use crate::money::{Currency, HomeAmount};
+use crate::reference::{Jurisdiction, RemitterType};
 use chrono::NaiveDate;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,13 +29,31 @@ pub enum AccountClass {
     Clearing,
     /// A line of credit: undrawn is Headroom, drawn is a Gap (CASH-HEAD-01).
     CreditLine,
+    /// Payroll source deductions held for remittance (GAP-PAYROLL-03).
+    PayrollLiability,
+    /// Wages payable / net pay clearing (GAP-PAYROLL-01).
+    Wages,
+    /// GST/HST or similar sales tax collected, including tax suspense (GAP-TAX-01, Q225).
+    SalesTaxLiability,
+    /// Accrued liabilities awaiting a bill (GAP-ACCRUAL-01).
+    AccruedLiabilities,
+    /// Corporate income tax payable (GAP-INCOME-01).
+    IncomeTaxPayable,
+    /// A loan balance that needs a payment schedule (GAP-LOAN-01).
+    Loan,
+    /// A lease liability that needs a payment schedule (GAP-LOAN-01).
+    LeaseLiability,
+    /// An intercompany due-to / due-from / loan account; `None` when the counterparty Entity is
+    /// not named (IC-MAP-01, Q131 / Q162).
+    Intercompany(Option<EntityId>),
     Unclassified,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CounterpartyClass {
-    /// Names which Entity in the Group the counterparty represents.
-    Intercompany(EntityId),
+    /// Names which Entity in the Group the counterparty represents; `None` when the mapping says
+    /// intercompany but has not named one (IC-MAP-01, Q131 / Q162).
+    Intercompany(Option<EntityId>),
     /// Owed amounts held in trust for a government (AP-PRIORITY-01).
     GovernmentTrust,
     Unclassified,
@@ -78,6 +97,72 @@ pub struct ScheduledObligation {
     pub frequency: Frequency,
     pub start: NaiveDate,
     pub end: Option<NaiveDate>,
+    /// When set, GAP-LOAN-01 treats this schedule as covering that loan/lease account.
+    pub covers_account: Option<FactId>,
+}
+
+/// Owner-entered payroll cadence (GAP-PAYROLL-01, Q111).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PayrollSchedule {
+    pub frequency: Frequency,
+    pub next_pay_date: NaiveDate,
+    pub expected_net_pay: HomeAmount,
+    /// Per-run source-deduction remittance; unset is Q119's "neither" path (GAP-PAYROLL-03).
+    pub expected_remittance: Option<HomeAmount>,
+    /// The processor or payee coverage tests match against (GAP-SCHED-02), when known.
+    pub paid_through: Option<FactId>,
+}
+
+/// Sales tax reporting period the owner confirms (GAP-TAX-03); selection of a calendar (ADR-0007).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SalesTaxReportingPeriod {
+    Monthly,
+    Quarterly,
+    Annual,
+}
+
+/// Tax accounting scheme the owner confirms (GAP-TAX-01, Q226). Distinct from the ledger-held
+/// `SalesTaxBasis` fact, which may prefill this with Confidence estimated (Q253).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaxAccountingScheme {
+    Standard,
+    Cash,
+    FlatRate,
+    /// Canada's Quick Method and any other scheme where the booked balance is not the return.
+    Other,
+}
+
+/// When an accrued liability is expected to settle (GAP-ACCRUAL-01, Q120).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccrualSettlement {
+    DaysAfterMonthEnd(u32),
+    OnDate(NaiveDate),
+}
+
+/// Corporate income tax timing inputs (GAP-INCOME-01).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CorporateTax {
+    /// Start of the current tax year (day and month recur).
+    pub tax_year_start: NaiveDate,
+    /// Owner-entered monthly instalment amount; unset means no instalments are forecast.
+    pub monthly_instalment: Option<HomeAmount>,
+    /// Whether the Entity qualifies for the later balance-due date; unset is Q160's earlier date.
+    pub balance_due_extension: Option<bool>,
+}
+
+/// An owner-entered settlement schedule for an intercompany balance (IC-LOAN-01, Q126): the
+/// Entity that pays, the Entity that receives, amount, frequency, next date and optional end.
+/// `accounts` are the balance accounts this schedule settles (IC-S02's L1 loans); empty means
+/// every intercompany account between the pair, which no Scenario uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntercompanySettlementSchedule {
+    pub owing: EntityId,
+    pub owed: EntityId,
+    pub amount: HomeAmount,
+    pub frequency: Frequency,
+    pub start: NaiveDate,
+    pub end: Option<NaiveDate>,
+    pub accounts: Vec<FactId>,
 }
 
 /// Tenant-owned values that change what the engine computes. Versioning is M2 persistence.
@@ -117,6 +202,30 @@ pub struct Settings {
     /// Obligations the owner enters that no ledger schedules (GAP-SCHED-01), by the id they are
     /// entered under, as `scheduled_receipts` is.
     pub scheduled_obligations: BTreeMap<FactId, ScheduledObligation>,
+    /// Payroll cadence per Entity (GAP-PAYROLL-01); optional, no default (ADR-0019).
+    pub payroll_schedules: BTreeMap<EntityId, PayrollSchedule>,
+    /// CRA remitter type or US deposit schedule selection (GAP-PAYROLL-04, ADR-0007).
+    pub remitter_types: BTreeMap<EntityId, RemitterType>,
+    /// Confirmed sales tax reporting period (GAP-TAX-03).
+    pub sales_tax_periods: BTreeMap<EntityId, SalesTaxReportingPeriod>,
+    /// Confirmed tax accounting scheme (GAP-TAX-01, Q226).
+    pub tax_accounting_schemes: BTreeMap<EntityId, TaxAccountingScheme>,
+    /// Expected settlement of an accrued-liability account (GAP-ACCRUAL-01).
+    pub accrual_settlements: BTreeMap<FactId, AccrualSettlement>,
+    /// Corporate tax-year start and instalments (GAP-INCOME-01).
+    pub corporate_tax: BTreeMap<EntityId, CorporateTax>,
+    /// Jurisdiction of a sales-tax or remittance obligation account (GAP-TAX-04); unset means
+    /// Canada federal when the Entity is otherwise Canadian in the Scenario.
+    pub tax_jurisdictions: BTreeMap<FactId, Jurisdiction>,
+    /// Settlement schedules for intercompany balances (IC-LOAN-01), keyed by the id they are
+    /// entered under (the Scenario's L1, L2, …).
+    pub intercompany_settlement_schedules: BTreeMap<FactId, IntercompanySettlementSchedule>,
+    /// Optional per-Group tolerance for same-currency reciprocal balances (IC-AGREE-01, Q124);
+    /// unset means exact agreement.
+    pub intercompany_tolerance: Option<HomeAmount>,
+    /// Intercompany accounts the owner has confirmed are not settling within the horizon
+    /// (IC-LOAN-02, Q126). Confirmation closes the settlement-plan item.
+    pub intercompany_not_settling: BTreeSet<FactId>,
 }
 
 /// Every account's and counterparty's Classification, computed before the Rules run.

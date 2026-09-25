@@ -626,6 +626,12 @@ impl Facts {
         &self.ledger_settings
     }
 
+    /// The Scenario builder fills ledger-held tax fields after the Entity exists (GAP-TAX-03,
+    /// Q253); construction already forbids a second `LedgerSettings` fact.
+    pub fn ledger_settings_mut(&mut self, entity: &EntityId) -> Option<&mut LedgerSettings> {
+        self.ledger_settings.get_mut(entity)
+    }
+
     pub fn accounts(&self) -> &BTreeMap<FactId, Account> {
         &self.accounts
     }

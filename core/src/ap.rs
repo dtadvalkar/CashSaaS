@@ -322,6 +322,7 @@ fn schedules(
             occurrence(template.start, template.frequency, k).filter(|on| *on < end && within(*on))
         {
             let subject = Subject::Occurrence {
+                entity: template.id.entity.clone(),
                 template: template.id.clone(),
                 date: on,
             };

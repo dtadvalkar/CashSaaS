@@ -47,15 +47,15 @@ BILL-1004 was paid on 10-01 and BILL-1005 charged on 10-02, both before the run 
 | Output | Bill | Week | Amount | Basis / reason | Confidence | Rules |
 |---|---|---|---|---|---|---|
 | Placement | BILL-1001 | W2 | 3,150.00 | due date | firm | AP-OPEN-01, AP-OPEN-04, AP-TIME-02 |
-| Placement | BILL-1002 | W4 | 1,575.00 | due date | estimated | AP-OPEN-02, AP-TIME-02 |
+| Placement | BILL-1002 | W4 | 1,575.00 | due date | estimated | AP-TIME-02, AP-OPEN-02, AP-OPEN-04 |
 
 | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|
 | approve or delete bill | BILL-1002 | bookkeeper | AP-OPEN-02 |
 
 - **BILL-1003** is voided and **BILL-1006** has a zero total, so both are ignored (Q145). Read
-  as an open bill due 09-15, BILL-1003 would be an overdue payment in W1.
-- **BILL-1005** is closed in AP. Its 840.00 is inside the card balance GAP-CARD-01 pays (Q103).
+  as an open bill, BILL-1003 would be an overdue payment in W1.
+- **BILL-1005** is closed in AP. Its amount is inside the card balance GAP-CARD-01 pays (Q103).
 - **Provisional:** no.
 
 ---
@@ -78,10 +78,10 @@ passed is not trusted.
 
 | Output | Bill | Week | Amount | Basis | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | BILL-2001 | W4 (10-28) | 2,400.00 | planned date | firm | AP-TIME-01 |
-| Placement | BILL-2002 | W4 (10-30) | 1,800.00 | due date | firm | AP-TIME-02 |
-| Placement | BILL-2003 | W1 | 1,250.00 | overdue | firm | AP-TIME-03 |
-| Placement | BILL-2004 | W1 | 680.00 | overdue | firm | AP-TIME-03 |
+| Placement | BILL-2001 | W4 (10-28) | 2,400.00 | planned date | firm | AP-TIME-01, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-2002 | W4 (10-30) | 1,800.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-2003 | W1 | 1,250.00 | overdue | firm | AP-TIME-03, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-2004 | W1 | 680.00 | overdue | firm | AP-TIME-03, AP-OPEN-01, AP-OPEN-04 |
 
 | Decision Item | Subject | Evidence | Acted on by | Rules |
 |---|---|---|---|---|
@@ -97,11 +97,12 @@ passed is not trusted.
 ## AP-S03 — A weekly pay run
 
 Concern: a business that pays bills on one weekday pays each bill in the last run before it falls
-due, never late, and pays overdue bills in the next run.
+due, never late, and pays overdue bills in the next run. The same weekday moves scheduled bills.
 
 **Facts.** Settings: pay-run weekday Thursday. Runs fall on 10-08, 10-15, 10-22, 10-29, 11-05 and
 every 7 days after. BILL-3001 falls due on a Tuesday, BILL-3002 on a Thursday, BILL-3005 on a
-Monday and BILL-3006 on the run date, a Wednesday; BILL-3004's planned date is a Friday.
+Monday and BILL-3006 on the run date, a Wednesday; BILL-3004's planned date is a Friday. T1 is a
+scheduled bill the pay run also moves.
 
 | Bill | Vendor | Due | Open | Planned payment date |
 |---|---|---|---|---|
@@ -112,25 +113,42 @@ Monday and BILL-3006 on the run date, a Wednesday; BILL-3004's planned date is a
 | BILL-3005 | Home Depot Pro | 10-12 | 915.00 | — |
 | BILL-3006 | Nutrien Ag Solutions | 10-07 | 1,340.00 | — |
 
+| Template | Vendor | Mode | Amount | Every | Starting | Due rule |
+|---|---|---|---|---|---|---|
+| T1 | Waste Connections of Canada | automatic | 610.00 | month | 11-08 | 10 days after bill date |
+
 **Expected**
 
 | Output | Bill | Week | Amount | Basis | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | BILL-3001 | W2 (10-15) | 2,260.00 | pay run | firm | AP-TIME-02, AP-RUN-01 |
-| Placement | BILL-3002 | W3 (10-22) | 3,900.00 | pay run | firm | AP-TIME-02, AP-RUN-01 |
-| Placement | BILL-3003 | W1 (10-08) | 450.00 | pay run | firm | AP-TIME-03, AP-RUN-01 |
-| Placement | BILL-3004 | W5 (11-06) | 1,100.00 | planned date | firm | AP-TIME-01 |
-| Placement | BILL-3005 | W1 (10-08) | 915.00 | pay run | firm | AP-TIME-02, AP-RUN-01 |
-| Placement | BILL-3006 | W1 (10-08) | 1,340.00 | pay run | firm | AP-TIME-02, AP-RUN-01 (Q156) |
+| Placement | BILL-3001 | W2 (10-15) | 2,260.00 | pay run | firm | AP-TIME-02, AP-RUN-01, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-3002 | W3 (10-22) | 3,900.00 | pay run | firm | AP-TIME-02, AP-RUN-01, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-3003 | W1 (10-08) | 450.00 | pay run | firm | AP-TIME-03, AP-RUN-01, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-3004 | W5 (11-06) | 1,100.00 | planned date | firm | AP-TIME-01, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-3005 | W1 (10-08) | 915.00 | pay run | firm | AP-TIME-02, AP-RUN-01, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-3006 | W1 (10-08) | 1,340.00 | pay run | firm | AP-TIME-02, AP-RUN-01, AP-OPEN-01, AP-OPEN-04 (Q156) |
+| Placement | T1 occurrence 11-08 | W6 (due 11-12) | 610.00 | scheduled bill | estimated | AP-SCHED-01, AP-RUN-01 |
+| Placement | T1 occurrence 12-08 | W11 (due 12-17) | 610.00 | scheduled bill | estimated | AP-SCHED-01, AP-RUN-01 |
+
+| Week | Opens | Receipts | Payments | Closes | Firm | Estimated |
+|---|---|---|---|---|---|---|
+| W1 | 0.00 | — | 2,705.00 | −2,705.00 | 100% | 0% |
+| W2 | −2,705.00 | — | 2,260.00 | −4,965.00 | 100% | 0% |
+| W3 | −4,965.00 | — | 3,900.00 | −8,865.00 | 100% | 0% |
+| W5 | −8,865.00 | — | 1,100.00 | −9,965.00 | 100% | 0% |
+| W6 | −9,965.00 | — | 610.00 | −10,575.00 | 0% | 100% |
+| W11 | −10,575.00 | — | 610.00 | −11,185.00 | 0% | 100% |
 
 | Decision Item | Subject | Acted on by | Rules |
 |---|---|---|---|
 | overdue bill | BILL-3003 | owner | AP-TIME-03 |
 
-- **BILL-3005** moves into an earlier week than its due date: the 10-15 run would be late.
+- **BILL-3005** moves into an earlier week than its due date: the next Thursday run would be late.
 - **BILL-3004's planned date** is not moved to a Thursday.
-- **BILL-3006 is due today.** Its last run on or before 10-07 was 10-01, already past, so it is
+- **BILL-3006 is due today.** Its last run on or before the run date is already past, so it is
   paid in the first run from the run date (Q156). It isn't overdue, so it raises no item.
+- **T1's due dates** follow its due rule; the pay run places them on the Thursdays in the Output
+  table.
 - **Provisional:** no.
 
 ---
@@ -165,7 +183,7 @@ The vendor's autopay, charged to the card:
 
 | Output | Item | Week | Amount | Basis / reason | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | BILL-4001 | W4 | 450.00 | due date | firm | AP-OPEN-01, AP-TIME-02 |
+| Placement | BILL-4001 | W4 | 450.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
 | Exclusion | T1 occurrence 10-10 | — | 450.00 | covered by BILL-4001 | — | AP-SCHED-01 |
 | Placement | T1 occurrence 11-10 | W8 (due 11-30) | 450.00 | scheduled bill | estimated | AP-SCHED-01 |
 | Placement | T1 occurrence 12-10 | W13 (due 12-30) | 450.00 | scheduled bill | estimated | AP-SCHED-01 |
@@ -174,8 +192,16 @@ The vendor's autopay, charged to the card:
 | Placement | T2 occurrence 12-08 | W11 (due 12-18) | 610.00 | scheduled bill | estimated | AP-SCHED-01 |
 | Exclusion | T3 | — | — | template not automatic | — | AP-SCHED-01 |
 
-- **The 10-06 card charge** is nearer T2's 10-08 occurrence than its 09-08 one, so it covers
-  10-08 (Q149). Its cash is in the card balance.
+| Week | Opens | Receipts | Payments | Closes | Firm | Estimated |
+|---|---|---|---|---|---|---|
+| W4 | 0.00 | — | 450.00 | −450.00 | 100% | 0% |
+| W7 | −450.00 | — | 610.00 | −1,060.00 | 0% | 100% |
+| W8 | −1,060.00 | — | 450.00 | −1,510.00 | 0% | 100% |
+| W11 | −1,510.00 | — | 610.00 | −2,120.00 | 0% | 100% |
+| W13 | −2,120.00 | — | 450.00 | −2,570.00 | 0% | 100% |
+
+- **The card charge** is nearer T2's October occurrence than its September one, so it covers
+  that occurrence (Q149). Its cash is in the card balance.
 - **T1's and T2's January occurrences** fall after the horizon.
 - **No Decision Items, not Provisional.**
 
@@ -206,9 +232,17 @@ order is billed.
 |---|---|---|---|---|---|---|---|
 | Placement | PO-5001 | W7 (11-19) | 18,500.00 | purchase order | estimated | — | AP-PO-01 |
 | Exclusion | PO-5002 | — | 4,200.00 | committed purchase, timing unknown | — | — | AP-PO-01 |
-| Placement | BILL-5101 | W4 | 2,740.00 | due date | firm | USD 2,000.00 at 1.3700 | AP-FX-01, AP-TIME-02 |
-| Exclusion | BILL-5102 | — | 3,000.00 | intercompany, see IC | — | — | AP-OPEN-03 |
+| Placement | BILL-5101 | W4 | 2,740.00 | due date | firm | USD 2,000.00 at 1.3700 | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-FX-01 |
+| Exclusion | BILL-5102 | — | 3,000.00 | intercompany, see IC | — | — | AP-OPEN-03, AP-OPEN-01 |
 
+| Week | Opens | Receipts | Payments | Closes | Firm | Estimated |
+|---|---|---|---|---|---|---|
+| W2 | 0.00 | — | 3,000.00 | −3,000.00 | 100% | 0% |
+| W4 | −3,000.00 | — | 2,740.00 | −5,740.00 | 100% | 0% |
+| W7 | −5,740.00 | — | 18,500.00 | −24,240.00 | 0% | 100% |
+
+- **W2's payment** is IC-ONESIDED-01 placing BILL-5102 (AP excluded it; IC placed it).
+- **W7's payment** is PO-5001 (AP-PO-01). W4 is BILL-5101.
 - **No Decision Items, not Provisional.**
 
 ---
@@ -240,24 +274,31 @@ One receipt, an open invoice:
 
 | Output | Bill | Week | Amount | Basis | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | BILL-6101 | W5 | 10,000.00 | due date | firm | AP-DISC-01, AP-TIME-02 |
-| Placement | BILL-6102 | W6 | 15,000.00 | due date | firm | AP-DISC-01, AP-TIME-02 |
-| Placement | BILL-6103 | W2 | 1,000.00 | due date | firm | AP-DISC-01, AP-TIME-02 |
+| Placement | BILL-6101 | W5 | 10,000.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-DISC-01 |
+| Placement | BILL-6102 | W6 | 15,000.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-DISC-01 |
+| Placement | BILL-6103 | W2 | 1,000.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-DISC-01 |
 
 | Decision Item | Subject | Evidence | Acted on by | Rules |
 |---|---|---|---|---|
 | take discount | BILL-6101 | Pay 9,800.00 by 10-16; saving 200.00; implied annual rate of not taking it 37.24% | owner | AP-DISC-02 |
 
-**How affordability comes out.** Base closing cash (CASH-ROLL-01): W2 24,000.00, W3 36,000.00,
-W5 26,000.00, W6 11,000.00; lowest 11,000.00.
-- **BILL-6101 first,** by the earlier discount date (Q157). Paying 9,800.00 in W2 instead of
-  10,000.00 in W5 gives W2 14,200.00, W3 26,200.00, W5 26,200.00, W6 11,200.00. Every week stays
-  at or above the 5,000.00 buffer, so the item is raised.
-- **BILL-6102 is then judged with BILL-6101's discount taken.** Paying 14,850.00 in W2 as well
-  gives W2 −650.00, so no item. Judged alone it would have passed (W2 9,150.00).
+| Week | Opens | Receipts | Payments | Closes | Firm | Estimated |
+|---|---|---|---|---|---|---|
+| W2 | 25,000.00 | — | 1,000.00 | 24,000.00 | 100% | 0% |
+| W3 | 24,000.00 | 12,000.00 | — | 36,000.00 | 100% | 0% |
+| W5 | 36,000.00 | — | 10,000.00 | 26,000.00 | 100% | 0% |
+| W6 | 26,000.00 | — | 15,000.00 | 11,000.00 | 100% | 0% |
+
+**How affordability comes out.** Base closing cash is the weeks table (CASH-ROLL-01); lowest at
+W6.
+- **BILL-6101 first,** by the earlier discount date (Q157). Paying the discounted amount in the
+  discount week instead of full on the due date keeps every week at or above the buffer, so the
+  item is raised (Evidence).
+- **BILL-6102 is then judged with BILL-6101's discount taken.** Paying both discounts in the same
+  week breaches zero, so no item. Judged alone it would have passed.
 - **BILL-6103's discount date** has passed, so no item.
 - **The implied rate** is discount ÷ (1 − discount) × 365 ÷ (days between the discount date and
-  the due date): 0.02 ÷ 0.98 × 365 ÷ 20.
+  the due date); Evidence carries the percentage.
 - **Provisional:** no.
 
 ---
@@ -287,8 +328,8 @@ Kubota Canada Ltd. has no open bills.
 
 | Output | Item | Week | Amount | Basis / reason | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Exclusion | BILL-7001 | — | 900.00 | offset by credit (VC-7101) | — | AP-UNAPPLIED-01 (Q148) |
-| Placement | BILL-7002 | W3 | 1,100.00 (1,400.00 less VC-7101's remaining 300.00) | due date | firm | AP-UNAPPLIED-01, AP-TIME-02 |
+| Exclusion | BILL-7001 | — | 900.00 | offset by credit (VC-7101) | — | AP-UNAPPLIED-01, AP-OPEN-01 (Q148) |
+| Placement | BILL-7002 | W3 | 1,100.00 (1,400.00 less VC-7101's remaining 300.00) | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-UNAPPLIED-01 |
 | Exclusion | PP-7201 | — | 2,500.00 | vendor credit balance | — | AP-UNAPPLIED-02 |
 
 | Decision Item | Subject | Acted on by | Draft Correction | Rules |
@@ -322,10 +363,10 @@ RG-0915 is September's source deductions; KCC-8102 is an equipment-financing ins
 
 | Output | Bill | Week | Amount | Basis | Confidence | Priority mark | Rules |
 |---|---|---|---|---|---|---|---|
-| Placement | RG-0915 | W2 | 3,400.00 | due date | firm | government trust | AP-PRIORITY-01, AP-TIME-02 |
-| Placement | NAS-8101 | W1 | 1,200.00 | overdue | firm | critical vendor | AP-PRIORITY-01, AP-TIME-03 |
-| Placement | KCC-8102 | W3 | 1,850.00 | due date | firm | secured lender | AP-PRIORITY-01, AP-TIME-02 |
-| Placement | HD-8103 | W3 | 700.00 | due date | firm | — | AP-TIME-02 |
+| Placement | RG-0915 | W2 | 3,400.00 | due date | firm | government trust | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-PRIORITY-01 |
+| Placement | NAS-8101 | W1 | 1,200.00 | overdue | firm | critical vendor | AP-TIME-03, AP-OPEN-01, AP-OPEN-04, AP-PRIORITY-01 |
+| Placement | KCC-8102 | W3 | 1,850.00 | due date | firm | secured lender | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-PRIORITY-01 |
+| Placement | HD-8103 | W3 | 700.00 | due date | firm | — | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
 
 | Decision Item | Subject | Priority mark | Acted on by | Rules |
 |---|---|---|---|---|
@@ -365,13 +406,13 @@ Bank spend transactions, none recorded as a bill payment:
 
 | Output | Bill | Week | Amount | Basis | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | BILL-9001 | W4 | 1,130.00 | due date | firm | AP-TIME-02, AP-DUP-01 |
-| Placement | BILL-9002 | W4 | 1,130.00 | due date | firm | AP-TIME-02, AP-DUP-01 |
-| Placement | BILL-9003 | W4 | 2,260.00 | due date | firm | AP-TIME-02, AP-DUP-01 |
-| Placement | BILL-9004 | W4 | 2,260.00 | due date | firm | AP-TIME-02, AP-DUP-01 |
-| Placement | BILL-9005 | W3 | 450.00 | due date | firm | AP-TIME-02, AP-PAID-01 |
-| Placement | BILL-9006 | W4 | 900.00 | due date | firm | AP-TIME-02 |
-| Placement | BILL-9007 | W3 | 800.00 | due date | firm | AP-TIME-02 |
+| Placement | BILL-9001 | W4 | 1,130.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-DUP-01 |
+| Placement | BILL-9002 | W4 | 1,130.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-DUP-01 |
+| Placement | BILL-9003 | W4 | 2,260.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-DUP-01 |
+| Placement | BILL-9004 | W4 | 2,260.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-DUP-01 |
+| Placement | BILL-9005 | W3 | 450.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04, AP-PAID-01 |
+| Placement | BILL-9006 | W4 | 900.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-9007 | W3 | 800.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
 
 | Decision Item | Subject | Evidence | Acted on by | Rules |
 |---|---|---|---|---|
@@ -379,7 +420,7 @@ Bank spend transactions, none recorded as a bill payment:
 | possible duplicate bill | BILL-9003, BILL-9004 | same amount and bill date | bookkeeper | AP-DUP-01 |
 | bill may already be paid | BILL-9005, bank spend 10-02 | same vendor and amount, on or after the bill date | bookkeeper | AP-PAID-01 |
 
-- **BILL-9006** is not flagged: the spend (10-01) is before the bill date (10-02).
+- **BILL-9006** is not flagged: the spend is before the bill date.
 - **BILL-9007** is not flagged: the amounts differ. No near-match is assumed.
 - **Provisional:** no.
 
@@ -408,15 +449,15 @@ Account balance at the end of the last completed month:
 
 | Output | Bill | Week | Amount | Basis | Confidence | Rules |
 |---|---|---|---|---|---|---|
-| Placement | BILL-10001 | W2 | 4,000.00 | due date | firm | AP-TIME-02 |
-| Placement | BILL-10002 | W3 | 2,500.00 | due date | firm | AP-TIME-02 |
+| Placement | BILL-10001 | W2 | 4,000.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
+| Placement | BILL-10002 | W3 | 2,500.00 | due date | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
 
 | Decision Item | Subject | Acted on by | Evidence | Rules |
 |---|---|---|---|---|
 | reconcile AP | Accounts Payable, September 2026 | bookkeeper | Open bills at 09-30 7,500.00 against control 7,850.00; difference 350.00 | AP-TIE-01 |
 
-- **BILL-10003 counts at month-end** (open on 09-30) but is not a payment, because it was paid
-  before the run date.
+- **BILL-10003 counts at month-end** (open then) but is not a payment, because it was paid before
+  the run date.
 - **Provisional:** yes. Reason: AP-TIE-01.
 
 ---
@@ -433,7 +474,7 @@ Account balance at the end of the last completed month:
 | AP-TIME-02 | S01–S10 |
 | AP-TIME-03 | S02, S03, S08 |
 | AP-RUN-01 | S03 |
-| AP-SCHED-01 | S04 |
+| AP-SCHED-01 | S03, S04 |
 | AP-PO-01 | S05 |
 | AP-FX-01 | S05 |
 | AP-DISC-01 | S06 |

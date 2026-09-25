@@ -87,15 +87,16 @@ them, figure for figure, with the document.
 
 ## Status
 
-The specification covers six *Families* of Rules. Three have code behind them:
+The specification covers six *Families* of Rules. Five are built and tested; CLOSE remains
+specified for a later milestone:
 
 | Family | What it does | Rules | Scenarios | State |
 |---|---|---|---|---|
 | **AR** | Turns open customer documents into expected receipts; raises collection, write-off and unbilled-revenue items | 18 | 11 | Built and tested |
 | **AP** | Turns open bills and committed purchases into expected payments; raises duplicate, discount and ledger-tie items | 19 | 10 | Built and tested |
-| **CASH** | Rolls every Family's expected amounts through the weeks; finds the Low Point; raises shortfall and buffer items; orders the queue; builds the Group view | 16 | 10 | Built; 9 of 10 Scenarios tested (the tenth needs a GAP Rule) |
-| **GAP** | Payroll, tax remittances, loans, leases, rent and subscriptions paid without a bill, card balances | 14 | 9 | Specified; 2 Rules built early |
-| **IC** | Cash between businesses in the same Group; pairing and eliminating both sides; who could fund whom | 10 | 7 | Specified; 4 Rules built early |
+| **CASH** | Rolls every Family's expected amounts through the weeks; finds the Low Point; raises shortfall and buffer items; orders the queue; builds the Group view | 16 | 10 | Built and tested |
+| **GAP** | Payroll, tax remittances, loans, leases, rent and subscriptions paid without a bill, card balances | 14 | 12 | Built and tested |
+| **IC** | Cash between businesses in the same Group; pairing and eliminating both sides; who could fund whom | 10 | 7 | Built and tested |
 | **CLOSE** | Whether the books are fit to forecast from: reconciliations, suspense accounts, period lock | 10 | 7 | Specified |
 
 **Does not exist yet:** connectors to QuickBooks Online and Xero, a database, a server, a web

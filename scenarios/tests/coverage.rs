@@ -14,12 +14,10 @@ use std::path::{Path, PathBuf};
 
 use scenarios::tables::{is_rule_id, section, tables};
 
-/// Scenarios with no test yet. Delete an entry as its test goes green. AR's and AP's entries went
-/// at their done-lines, and the convention was that this list is empty at every Family's done-line
-/// (ADR-0021, Q213). CASH is the first Family to break it: **CASH-S03 stays here past the CASH
-/// done-line**, because it needs GAP-TAX-01 and Q275 leaves that Rule to the GAP build, which
-/// builds CASH-S03 alongside GAP-S06 and GAP-S07. The rest go as the CASH build reaches them.
-const PENDING: &[&str] = &["CASH-S03"];
+/// Scenarios with no test yet. Delete an entry as its test goes green. AR, AP, CASH and GAP are
+/// empty at their done-lines (ADR-0021, Q213). CASH-S03 was the one CASH left here for GAP-TAX-01
+/// (Q275) until GAP Checkpoint C built it with GAP-S06 and GAP-S07.
+const PENDING: &[&str] = &[];
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -191,11 +189,14 @@ fn every_scenario_declares_the_rules_the_coverage_table_maps_to_it() {
         let rules_doc = read(&docs.join("rules").join(family.to_lowercase() + ".md"));
 
         // A Family with a test file is built, so its documents may not still say it is not. The
-        // owner edits that line; this only refuses to let it go stale unnoticed, so
-        // the next Family cannot ship the way AR did with "Nothing here is built" still at the top.
+        // owner edits that line; this only refuses to let it go stale unnoticed. Match the phrases
+        // AR, GAP and CASH have used — not "Being built", which AP's Scenario head still carries.
         for (folder, doc) in [("rules", &rules_doc), ("scenarios", &scenarios_doc)] {
+            let lower_doc = doc.to_ascii_lowercase();
+            let stale = lower_doc.contains("nothing here is built")
+                || lower_doc.contains("nothing else here is built");
             assert!(
-                !doc.contains("Nothing here is built"),
+                !stale,
                 "{family} is built, and docs/{folder}/{lower}.md still says it is not — \
                  the owner edits that line",
                 lower = family.to_lowercase(),

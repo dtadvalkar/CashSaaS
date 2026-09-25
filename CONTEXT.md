@@ -79,7 +79,9 @@ Versioned so that past Forecast Runs stay explainable.
 _Avoid_: Config, option, preference
 
 **Reference Data**:
-Versioned facts about the world that are not tenant-owned — statutory due-date calendars,
+Versioned facts about the world that are not tenant-owned — statutory due-date calendars
+(including CRA payroll remitter period boundaries and dues, ADR-0007 / Q285), holiday lists,
+and other public-law schedules. Which calendar applies to an Entity is a Setting.
 FX rates, provider metadata. Changes because the world changed, not because a tenant
 chose differently.
 _Avoid_: Constants, lookup table

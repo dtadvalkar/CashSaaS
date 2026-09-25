@@ -1,11 +1,9 @@
 # CASH Scenarios
 
-Status: **approved by the owner** (2026-09-14). Being built: each Scenario here becomes a test in
-`scenarios/tests/cash.rs` as the build reaches it, and `tools/mutate.py cash` sweeps this document
-for figures a test would not catch. This document is fixed input: when a test disagrees with it,
-the code is wrong (`README.md`). CASH-S03 is the exception, built at the GAP build because it
-needs GAP-TAX-01 (Q275); until then it is the one entry in `PENDING`
-(`scenarios/tests/coverage.rs`).
+Status: **approved by the owner** (2026-09-14). Built: every Scenario here passes as a test in
+`scenarios/tests/cash.rs`, and `tools/mutate.py cash` sweeps this document for figures a test
+would not catch. This document is fixed input: when a test disagrees with it, the code is wrong
+(`README.md`). CASH-S03 was built at GAP Checkpoint C because it needs GAP-TAX-01 (Q275).
 
 Each Scenario is a named general accounting concern, described as Canonical Facts and Settings,
 with the outputs the CASH Rules must produce (ADR-0010, ADR-0016). Together these exercise every
@@ -68,10 +66,10 @@ Business, the 22nd.
 | W1 | 42,150.00 | 2,300.00 | — | 44,450.00 | 100% | 0% |
 | W3 | 44,450.00 | — | 3,480.00 | 40,970.00 | 100% | 0% |
 
-- **Weeks:** 13 buckets, W1 to W13 (CASH-WEEK-01). W2 closes at 44,450.00; W4 to W13 at
-  40,970.00 (CASH-ROLL-01).
+- **Weeks:** 13 buckets, W1 to W13 (CASH-WEEK-01). Weeks with no Placement roll forward at the
+  prior close (CASH-ROLL-01); the weeks table lists only weeks with movement.
 - **Low Point:** 40,970.00 in W3, the first of the weeks at that level (CASH-LOW-01, Q152).
-- **Without CASH-OPEN-04,** Opening Cash would be 38,670.00, netting card debt against cash.
+- **Without CASH-OPEN-04,** Opening Cash would net card debt against cash.
 - **No Headroom, no Decision Items, not Provisional.**
 
 ---
@@ -137,7 +135,7 @@ Settings, scheduled obligations for the interest on each drawn line:
 
 | # | Class | Decision Item | Subject | Acted on by | Due | Rules |
 |---|---|---|---|---|---|---|
-| 1 | action | map credit line account | RBC Royal Line of Credit | owner | — | CASH-HEAD-01 |
+| 1 | action | map credit line account | RBC Royal Line of Credit | owner | — | CASH-HEAD-01, CASH-ORDER-01 |
 
 - **Provisional:** no.
 
@@ -177,12 +175,12 @@ June remittance, 3,900.00, was paid 07-31. The ledger lock date is 09-30.
 
 | Placement | Week | Amount | Rules |
 |---|---|---|---|
-| BT-3301 | W2 | −9,500.00 | AP-TIME-02 |
-| INV-3101 | W4 | +7,000.00 | AR-TIME-02 |
+| BT-3301 | W2 | −9,500.00 | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
+| INV-3101 | W4 | +7,000.00 | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
 | GST/HST remittance for July to September, due 10-31, trust-marked | W4 | −4,200.00 | GAP-TAX-01 |
-| INV-3102 | W5 | +5,000.00 | AR-TIME-02 |
-| ST-3302 | W9 | −12,000.00 | AP-TIME-02 |
-| INV-3103 | W11 | +9,000.00 | AR-TIME-02 |
+| INV-3102 | W5 | +5,000.00 | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
+| ST-3302 | W9 | −12,000.00 | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
+| INV-3103 | W11 | +9,000.00 | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
 
 The October to December remittance falls due after the horizon.
 
@@ -205,11 +203,11 @@ The October to December remittance falls due after the horizon.
 
 | # | Class | Decision Item | Subject | Acted on by | Due | Evidence | Rules |
 |---|---|---|---|---|---|---|---|
-| 1 | critical | cash shortfall | Maple Ridge Landscaping Ltd. | owner | 10-14 | Stretch W2–W4, lowest −3,500.00 (W2), trust obligations inside: GST/HST remittance 4,200.00 (W4). Stretch W9–W10, lowest −7,700.00 (W9), no trust obligations. Headroom 25,000.00. | CASH-SHORT-01, CASH-ORDER-01 |
+| 1 | critical | cash shortfall | Maple Ridge Landscaping Ltd. | owner | 10-14 | Stretch W2–W4, lowest −3,500.00; trust obligations inside: GST/HST remittance 4,200.00 (W4); Stretch W9–W10, lowest −7,700.00; no trust obligations inside; Headroom 25,000.00 | CASH-SHORT-01, CASH-ORDER-01 |
 
 - **One item, not two:** both stretches are evidence on the same "cash shortfall" item.
-- **Not Provisional,** so the item carries no Provisional note. No other Family raises an item:
-  nothing is overdue, and the lock date covers the last closed tax period (ended 06-30).
+- **Provisional:** no. The item carries no Provisional note. No other Family raises an item:
+  nothing is overdue, and the lock date covers the last closed tax period.
 
 ---
 
@@ -250,12 +248,12 @@ shortfall, not again as below buffer.
 
 | # | Class | Decision Item | Subject | Acted on by | Due | Evidence | Rules |
 |---|---|---|---|---|---|---|---|
-| 1 | critical | cash shortfall | Maple Ridge Landscaping Ltd. | owner | 11-11 | Stretch W6, lowest −3,000.00. No Headroom. | CASH-SHORT-01 |
+| 1 | critical | cash shortfall | Maple Ridge Landscaping Ltd. | owner | 11-11 | Stretch W6, lowest −3,000.00. No Headroom. | CASH-SHORT-01, CASH-ORDER-01 |
 | 2 | critical | below buffer | Maple Ridge Landscaping Ltd. | owner | 10-14 | Buffer 10,000.00. Stretch W2, lowest 8,000.00. Stretch W7, lowest 5,000.00. No Headroom. | CASH-BUFFER-01, CASH-ORDER-01 (Q154) |
 
 - **W6 is not a below-buffer week:** it is below zero, so it belongs to the shortfall item.
-- **With no buffer set,** CASH-BUFFER-01 does nothing: see CASH-S03, where weeks closing between zero
-  and 10,000.00 raise no item.
+- **With no buffer set,** CASH-BUFFER-01 does nothing: see CASH-S03, where weeks closing between
+  zero and the buffer raise no item.
 - **Provisional:** no.
 
 ---
@@ -305,13 +303,13 @@ Settings, scheduled receipts entered 09-20:
 | W13 | 62,000.00 | 3,000.00 | — | 65,000.00 | 100% | 0% |
 
 - **Coverage (Q149):**
-  - **The 10-02 receipt** is nearer SR1's 10-01 occurrence than its 11-01 one, so it covers
-    10-01, which is before the run date. The 11-01 occurrence stays. Under the wording Q149
-    replaced ("between the previous occurrence and this one") it would have covered 11-01, and
-    3,000.00 would have gone missing.
-  - **The 10-06 receipt** is nearer 10-15 than 09-15, SR2's frequency extended before its first
-    date, so it covers 10-15.
-- **SR1's 10-01 occurrence** falls before the run date, so it is neither placed nor shown.
+  - **The early SR1-dated receipt** is nearer SR1's October occurrence than its November one, so
+    it covers the October occurrence, which is before the run date. The November occurrence stays.
+    Under the wording Q149 replaced ("between the previous occurrence and this one") it would have
+    covered November, and that amount would have gone missing.
+  - **The SR2-dated receipt** is nearer SR2's first occurrence than the prior slot of its
+    frequency, so it covers that occurrence.
+- **SR1's October occurrence** falls before the run date, so it is neither placed nor shown.
 - **Low Point:** 31,000.00 in W1.
 - **No Decision Items, not Provisional.**
 
@@ -339,7 +337,7 @@ Concern: the length of a forecast has no general default, so it is asked for, no
 
 | # | Class | Decision Item | Subject | Acted on by | Due | Rules |
 |---|---|---|---|---|---|---|
-| 1 | action | set horizon | Group | owner | — | CASH-WEEK-01 |
+| 1 | action | set horizon | Group | owner | — | CASH-WEEK-01, CASH-ORDER-01 |
 
 - **No weeks,** so no roll-forward, Confidence, Low Point, shortfall or buffer check. INV-6101 is
   not bucketed.
@@ -370,9 +368,9 @@ negative (`docs/facts.md`).
 
 | Output | Item | Week | Amount | Confidence | Rules |
 |---|---|---|---|---|---|
-| Placement | INV-7101 | W2 | +6,000.00 | firm | AR-TIME-02 |
-| Placement | WT-7401 | W2 | −4,000.00 | estimated | AP-OPEN-02 |
-| Exclusion | INV-7102, no timing evidence | — | 1,800.00 | — | AR-TIME-04 |
+| Placement | INV-7101 | W2 | +6,000.00 | firm | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
+| Placement | WT-7401 | W2 | −4,000.00 | estimated | AP-TIME-02, AP-OPEN-02, AP-OPEN-04 |
+| Exclusion | INV-7102, no timing evidence | — | 1,800.00 | — | AR-TIME-04, AR-OPEN-01, AR-OPEN-04 |
 | Exclusion | RBC Visa Business, no payment day | — | 2,500.00 | — | GAP-CARD-01 |
 
 **Expected**
@@ -386,16 +384,16 @@ negative (`docs/facts.md`).
 |---|---|---|---|---|---|---|
 | W2 | 20,000.00 | 6,000.00 | 4,000.00 | 22,000.00 | 60% | 40% |
 
-- **Confidence counts size:** 6,000.00 firm and 4,000.00 estimated, out of 10,000.00 moved. By net
-  amount it would read as 2,000.00 of movement, hiding the estimate (CASH-CONF-01).
+- **Confidence counts size:** firm and estimated shares are of amounts moved, not of net cash
+  (CASH-CONF-01); the weeks table's Firm and Estimated columns show the split.
 - **Low Point:** 20,000.00 in W1.
 
 | # | Class | Decision Item | Subject | Acted on by | Due | Rules |
 |---|---|---|---|---|---|---|
-| 1 | blocking | set card payment day | RBC Visa Business (2,500.00) | owner | — | GAP-CARD-01 |
-| 2 | blocking | set expected date | INV-7102 (1,800.00) | owner | — | AR-TIME-04 |
-| 3 | action | approve or delete bill | WT-7401 (4,000.00) | bookkeeper | — | AP-OPEN-02 |
-| 4 | action | collect | INV-7102 (1,800.00) | owner | — | AR-COLLECT-01 |
+| 1 | blocking | set card payment day | RBC Visa Business (2,500.00) | owner | — | GAP-CARD-01, CASH-ORDER-01 |
+| 2 | blocking | set expected date | INV-7102 (1,800.00) | owner | — | AR-TIME-04, CASH-ORDER-01 |
+| 3 | action | approve or delete bill | WT-7401 (4,000.00) | bookkeeper | — | AP-OPEN-02, CASH-ORDER-01 |
+| 4 | action | collect | INV-7102 (1,800.00) | owner | — | AR-COLLECT-01, CASH-ORDER-01 |
 
 - **Ordering (CASH-ORDER-01):**
   - **Blocking:** neither item's cash lands in the horizon, so the larger total goes first.
@@ -433,13 +431,13 @@ trust.
 
 | Placement | Week | Amount | Confidence | Rules |
 |---|---|---|---|---|
-| RG-0815 | W1 | −2,600.00 | firm | AP-TIME-03 |
-| NAS-5512 | W1 | −1,200.00 | firm | AP-TIME-03 |
-| HD-88410 | W1 | −3,100.00 | firm | AP-TIME-03 |
-| TEL-1009 | W1 | −450.00 | firm | AP-TIME-03 |
-| BT-2210 | W3 | −6,000.00 | firm | AP-TIME-02 |
-| INV-8101 | W7 | +12,000.00 | firm | AR-TIME-02 |
-| WT-0417 | W8 | −5,000.00 | estimated | AP-OPEN-02 |
+| RG-0815 | W1 | −2,600.00 | firm | AP-TIME-03, AP-OPEN-01, AP-OPEN-04, AP-PRIORITY-01 |
+| NAS-5512 | W1 | −1,200.00 | firm | AP-TIME-03, AP-OPEN-01, AP-OPEN-04, AP-PRIORITY-01 |
+| HD-88410 | W1 | −3,100.00 | firm | AP-TIME-03, AP-OPEN-01, AP-OPEN-04 |
+| TEL-1009 | W1 | −450.00 | firm | AP-TIME-03, AP-OPEN-01, AP-OPEN-04 |
+| BT-2210 | W3 | −6,000.00 | firm | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
+| INV-8101 | W7 | +12,000.00 | firm | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
+| WT-0417 | W8 | −5,000.00 | estimated | AP-TIME-02, AP-OPEN-02, AP-OPEN-04 |
 
 **Expected**
 
@@ -458,12 +456,12 @@ trust.
 
 | # | Class | Decision Item | Subject | Acted on by | Due | Why here | Rules |
 |---|---|---|---|---|---|---|---|
-| 1 | critical | cash shortfall | Maple Ridge Landscaping Ltd. | owner | 10-21 | Stretch W3–W6, lowest −5,350.00; no trust obligations inside; no Headroom | CASH-SHORT-01 |
-| 2 | action | overdue bill | RG-0815 | owner | — | held in trust for a government | AP-TIME-03 |
-| 3 | action | overdue bill | NAS-5512 | owner | — | critical vendor | AP-TIME-03 |
-| 4 | action | overdue bill | HD-88410 | owner | — | 3,100.00 lands on or before W3 | AP-TIME-03 |
-| 5 | action | overdue bill | TEL-1009 | owner | — | 450.00 lands on or before W3 | AP-TIME-03 |
-| 6 | action | approve or delete bill | WT-0417 | bookkeeper | — | nothing lands by W3; total 5,000.00 | AP-OPEN-02 |
+| 1 | critical | cash shortfall | Maple Ridge Landscaping Ltd. | owner | 10-21 | Stretch W3–W6, lowest −5,350.00; no trust obligations inside; no Headroom | CASH-SHORT-01, CASH-ORDER-01 |
+| 2 | action | overdue bill | RG-0815 | owner | — | held in trust for a government | AP-TIME-03, AP-PRIORITY-01, CASH-ORDER-01 |
+| 3 | action | overdue bill | NAS-5512 | owner | — | critical vendor | AP-TIME-03, AP-PRIORITY-01, CASH-ORDER-01 |
+| 4 | action | overdue bill | HD-88410 | owner | — | 3,100.00 lands on or before W3 | AP-TIME-03, CASH-ORDER-01 |
+| 5 | action | overdue bill | TEL-1009 | owner | — | 450.00 lands on or before W3 | AP-TIME-03, CASH-ORDER-01 |
+| 6 | action | approve or delete bill | WT-0417 | bookkeeper | — | nothing lands by W3; total 5,000.00 | AP-OPEN-02, CASH-ORDER-01 |
 
 - **Cash before the Low Point outranks size:** WT-0417 is the largest action item but comes last.
 - **Only the shortfall has a due date** (Q93).
@@ -502,13 +500,13 @@ Entity's Home Currency; `Open (document)` is in the document's own currency.
 
 | Entity | Placement | Week | Amount (Home Currency) | Pair | Rules |
 |---|---|---|---|---|---|
-| Maple Ridge | BH-501 | W3 | −4,000.00 | P1 | IC-DOC-01 |
-| Birch Hill | BH-501 | W3 | +4,000.00 | P1 | IC-DOC-01 |
-| Maple Ridge | CG-2207 | W4 | −1,350.00 | P2 | IC-DOC-01 |
-| Cascade | CG-2207 | W4 | +USD 1,000.00 | P2 | IC-DOC-01 |
-| Maple Ridge | INV-9101 | W5 | +8,000.00 | — | AR-TIME-02 |
-| Birch Hill | WT-9401 | W6 | −12,000.00 | — | AP-TIME-02 |
-| Cascade | PG-9402 | W9 | −USD 2,500.00 | — | AP-TIME-02 |
+| Maple Ridge | BH-501 | W3 | −4,000.00 | P1 | IC-MAP-01, IC-DOC-01 |
+| Birch Hill | BH-501 | W3 | +4,000.00 | P1 | IC-MAP-01, IC-DOC-01, IC-ELIM-01 |
+| Maple Ridge | CG-2207 | W4 | −1,350.00 | P2 | IC-MAP-01, IC-DOC-01 |
+| Cascade | CG-2207 | W4 | +USD 1,000.00 | P2 | IC-MAP-01, IC-DOC-01, IC-ELIM-01 |
+| Maple Ridge | INV-9101 | W5 | +8,000.00 | — | AR-TIME-02, AR-OPEN-01, AR-OPEN-04 |
+| Birch Hill | WT-9401 | W6 | −12,000.00 | — | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
+| Cascade | PG-9402 | W9 | −USD 2,500.00 | — | AP-TIME-02, AP-OPEN-01, AP-OPEN-04 |
 
 **Expected: each Entity**
 
@@ -518,7 +516,7 @@ Entity's Home Currency; `Open (document)` is in the document's own currency.
 | Birch Hill | 5,000.00 | W3 9,000.00; W6 −3,000.00 | −3,000.00 (W6) |
 | Cascade | USD 7,000.00 | W4 USD 8,000.00; W9 USD 5,500.00 | USD 5,500.00 (W9) |
 
-All Placements are firm, so every week with movement is 100% firm.
+All Placements are firm, so every week with movement is fully firm.
 
 **Expected: Group view (CAD)**
 
@@ -532,16 +530,17 @@ All Placements are firm, so every week with movement is 100% firm.
 
 - **Label:** a total of separate Entities' cash, which does not mean cash can move between them
   (CASH-GROUP-01).
-- **Opening:** 30,000.00 + 5,000.00 + USD 7,000.00 × 1.3600 (9,520.00).
-- **P2's difference:** Cascade receives USD 1,000.00 = 1,360.00 at the Group rate; Maple Ridge
-  pays 1,350.00 at its booked rate. The 10.00 that doesn't eliminate is shown.
+- **Opening:** each Entity's Opening Cash converted at the Group rate; the Group weeks table
+  opens at that sum.
+- **P2's difference:** the Intercompany currency difference column holds what does not eliminate
+  when the booked rate differs from the Group rate.
 - **The Group never goes below zero, and Birch Hill still does.** The Group total raises nothing;
   Birch Hill's shortfall is raised on Birch Hill.
 
 | Entity | # | Class | Decision Item | Acted on by | Due | Evidence | Rules |
 |---|---|---|---|---|---|---|---|
-| Birch Hill | 1 | critical | cash shortfall | owner | 11-11 | Stretch W6–W13, lowest −3,000.00; no trust obligations; no Headroom | CASH-SHORT-01 |
-| Birch Hill | 2 | action | consider intercompany funding | owner | — | — | IC-FUND-01 |
+| Birch Hill | 1 | critical | cash shortfall | owner | 11-11 | Stretch W6–W13, lowest −3,000.00; no trust obligations; no Headroom | CASH-SHORT-01, CASH-ORDER-01 |
+| Birch Hill | 2 | action | consider intercompany funding | owner | — | Cascade could transfer 2,205.88 in W6; Maple Ridge could transfer 3,000.00 in W6. Caveats: characterise it as a loan, distribution or capital contribution; a loan needs documented terms, and arm's-length interest may apply; a distribution must pass the lender's solvency test; shareholder-loan rules can tax a loan to an individual owner; lender covenants may restrict it. | IC-FUND-01, CASH-ORDER-01 |
 
 - **Maple Ridge and Cascade:** no Decision Items.
 - **Provisional:** no.
@@ -581,7 +580,7 @@ touch its own forecast.
 
 | Entity | # | Class | Decision Item | Subject | Acted on by | Due | Rules |
 |---|---|---|---|---|---|---|---|
-| Cascade | 1 | blocking | set conversion rate | USD to CAD | owner | — | CASH-GROUP-02 (Q155) |
+| Cascade | 1 | blocking | set conversion rate | USD to CAD | owner | — | CASH-GROUP-02, CASH-ORDER-01 (Q155) |
 
 - **Provisional:** yes. Reason: CASH-GROUP-02 on Cascade Garden Supply Inc.
 

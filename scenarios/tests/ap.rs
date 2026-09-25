@@ -80,7 +80,13 @@ fn ap_s02_owner_planned_payment_dates_current_and_stale() {
 
 #[test]
 fn ap_s03_a_weekly_pay_run() {
-    let rules = ["AP-TIME-01", "AP-TIME-02", "AP-TIME-03", "AP-RUN-01"];
+    let rules = [
+        "AP-TIME-01",
+        "AP-TIME-02",
+        "AP-TIME-03",
+        "AP-RUN-01",
+        "AP-SCHED-01",
+    ];
     let mut s = Scenario::new("AP-S03");
     s.entity("Maple Ridge Landscaping Ltd.", "CAD");
     s.pay_run(Weekday::Thu);
@@ -108,6 +114,11 @@ fn ap_s03_a_weekly_pay_run() {
     s.bill("BILL-3006", "Nutrien Ag Solutions")
         .due("10-07")
         .total("1,340.00")
+        .add();
+    s.bill_template("T1", "Waste Connections of Canada")
+        .amount("610.00")
+        .starting("11-08")
+        .due_after(10)
         .add();
     let run = s.run();
     check(&s, &run, DOC, &rules);

@@ -5,13 +5,16 @@ A Scenario test is only worth its green if a wrong figure fails it. This changes
 time in `docs/scenarios/<family>.md` and runs that Family's tests: a mutation the tests still pass
 is an escape, and an escape means the comparison is not comparing (ADR-0010 as amended, Q192).
 
-Every mutation runs in a throwaway `git worktree` checked out at `HEAD`, so the approved document
-in the working copy is never touched — and so what is reviewed is what was committed, which is the
-commit-per-Scenario boundary the build brief sets. Uncommitted work is not reviewed; commit first.
-Research tooling, not product code: `core` stays pure (ADR-0004).
+Every mutation runs in a throwaway `git worktree`. By default that worktree is checked out at
+`HEAD` and then overlaid with the current working tree's `core/`, `scenarios/` and
+`docs/scenarios/`, so an uncommitted Checkpoint can be swept before it is committed (the owner
+prefers mutate-before-commit). Pass `--committed` to review `HEAD` alone, with no overlay — the
+post-commit independent review. The approved document in the developer's working copy is never
+touched. Research tooling, not product code: `core` stays pure (ADR-0004).
 
-    python tools/mutate.py ar              # every Scenario with a test
+    python tools/mutate.py ar              # every Scenario with a test (working tree overlay)
     python tools/mutate.py ar AR-S04       # one Scenario
+    python tools/mutate.py ar AR-S04 --committed   # HEAD only, no overlay
 """
 
 import re
@@ -22,6 +25,9 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+
+# Paths the Scenario tests need from the working tree when sweeping before commit.
+OVERLAY = ("core", "scenarios", "docs/scenarios")
 
 # A figure worth changing: an amount, a date, or a bare count. A `Q` before a number marks a
 # design question (`Q150`), a reference and not a figure.
@@ -107,6 +113,29 @@ def replace_nth(text: str, before: str, after: str, n: int) -> str:
     return text[:at] + after + text[at + len(before) :]
 
 
+def overlay_working_tree(tree: Path) -> None:
+    """Replace the worktree's engine and Scenario paths with the developer's working copy."""
+    for rel in OVERLAY:
+        src = REPO / rel
+        dst = tree / rel
+        if not src.exists():
+            continue
+        if dst.exists():
+            if dst.is_dir():
+                shutil.rmtree(dst)
+            else:
+                dst.unlink()
+        if src.is_dir():
+            shutil.copytree(
+                src,
+                dst,
+                ignore=shutil.ignore_patterns("target", ".git"),
+            )
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+
 def run_test(tree: Path, family: str, scenario: str) -> bool:
     """Whether one Scenario's test passes in this worktree. `AR-S03` names `ar_s03_…`."""
     done = subprocess.run(
@@ -122,11 +151,13 @@ def run_test(tree: Path, family: str, scenario: str) -> bool:
 def main() -> int:
     # The documents use a typographic minus, which a cp1252 console cannot print.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    if len(sys.argv) < 2:
+    args = [a for a in sys.argv[1:] if a != "--committed"]
+    committed_only = "--committed" in sys.argv[1:]
+    if len(args) < 1:
         print(__doc__)
         return 2
-    family = sys.argv[1].lower()
-    only = sys.argv[2].upper() if len(sys.argv) > 2 else None
+    family = args[0].lower()
+    only = args[1].upper() if len(args) > 1 else None
 
     doc_path = Path("docs/scenarios") / f"{family}.md"
     doc = (REPO / doc_path).read_text(encoding="utf-8")
@@ -144,7 +175,9 @@ def main() -> int:
         text=True,
         check=True,
     ).stdout.strip()
-    print(f"reviewing HEAD: {head}\n")
+    mode = "HEAD only (--committed)" if committed_only else "HEAD + working-tree overlay"
+    print(f"reviewing {mode}")
+    print(f"base: {head}\n")
 
     tmp = Path(tempfile.mkdtemp(prefix="mutate-"))
     tree = tmp / "tree"
@@ -154,6 +187,8 @@ def main() -> int:
         check=True,
         capture_output=True,
     )
+    if not committed_only:
+        overlay_working_tree(tree)
     target = tree / doc_path
     try:
         escapes: list[str] = []

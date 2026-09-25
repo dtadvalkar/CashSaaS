@@ -16,14 +16,17 @@ use cashsaas_core::facts::{
     Discount, Document, DocumentKind, DocumentStatus, DueRule, EntityId, FactId, Facts, Frequency,
     FrequencyUnit, Installment, LedgerSettings, Metadata, Payment, PaymentPurpose, PaymentTerms,
     PostingStatus, Provenance, PurchaseOrder, PurchaseOrderStatus, Reconciliation, Rejection,
-    ScheduledTemplate, Side, Source, TemplateMode,
+    SalesTaxBasis, ScheduledTemplate, Side, Source, TemplateMode,
 };
 use cashsaas_core::forecast::{ForecastRun, Horizon, run_forecast};
 use cashsaas_core::money::{
     Currency, HomeAmount, Money, Quote, TransactionAmount, TransactionPart,
 };
+use cashsaas_core::reference::{Jurisdiction, RemitterType};
 use cashsaas_core::settings::{
-    AccountClass, CounterpartyClass, ScheduledObligation, ScheduledReceipt, Settings,
+    AccountClass, AccrualSettlement, CorporateTax, CounterpartyClass,
+    IntercompanySettlementSchedule, PayrollSchedule, SalesTaxReportingPeriod, ScheduledObligation,
+    ScheduledReceipt, Settings,
 };
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
@@ -392,13 +395,104 @@ impl Scenario {
         self
     }
 
-    /// The owner's mapping of a customer as intercompany, naming the sister Entity.
-    pub fn intercompany(&mut self, customer: &str, entity: &str) -> &mut Self {
-        let id = self.customer(customer);
+    /// The owner's mapping of a customer or vendor as intercompany, naming the sister Entity.
+    pub fn intercompany(&mut self, contact: &str, entity: &str) -> &mut Self {
+        let id = self.customer(contact);
         self.settings.counterparty_mappings.insert(
             id,
-            CounterpartyClass::Intercompany(EntityId(entity.to_owned())),
+            CounterpartyClass::Intercompany(Some(EntityId(entity.to_owned()))),
         );
+        self
+    }
+
+    /// An intercompany contact with no counterparty Entity named (IC-MAP-01, Q162).
+    pub fn intercompany_unnamed(&mut self, contact: &str) -> &mut Self {
+        let id = self.customer(contact);
+        self.settings
+            .counterparty_mappings
+            .insert(id, CounterpartyClass::Intercompany(None));
+        self
+    }
+
+    /// An account mapped as intercompany, naming the sister Entity (IC-LOAN-*).
+    pub fn intercompany_account(&mut self, account: &str, entity: &str) -> &mut Self {
+        let id = self.account(account);
+        self.settings.account_mappings.insert(
+            id,
+            AccountClass::Intercompany(Some(EntityId(entity.to_owned()))),
+        );
+        self
+    }
+
+    /// Optional per-Group tolerance for same-currency reciprocal balances (IC-AGREE-01).
+    pub fn intercompany_tolerance(&mut self, total: &str) -> &mut Self {
+        self.settings.intercompany_tolerance = Some(HomeAmount(amount(total)));
+        self
+    }
+
+    /// An intercompany settlement schedule (IC-LOAN-01), entered under `id`. `owing_owed` is
+    /// (Entity that pays, Entity that receives). Call `settlement_covers` to name the accounts.
+    pub fn intercompany_settlement(
+        &mut self,
+        id: &str,
+        owing_owed: (&str, &str),
+        total: &str,
+        unit: FrequencyUnit,
+        start: &str,
+        end: Option<&str>,
+    ) -> &mut Self {
+        let fact = self.id("IntercompanySettlement", id);
+        self.settings.intercompany_settlement_schedules.insert(
+            fact,
+            IntercompanySettlementSchedule {
+                owing: EntityId(owing_owed.0.to_owned()),
+                owed: EntityId(owing_owed.1.to_owned()),
+                amount: HomeAmount(amount(total)),
+                frequency: Frequency { unit, interval: 1 },
+                start: self.date(start),
+                end: end.map(|d| self.date(d)),
+                accounts: Vec::new(),
+            },
+        );
+        self
+    }
+
+    /// The balance accounts an intercompany settlement schedule settles (IC-S02's L1 loans).
+    pub fn settlement_covers(&mut self, id: &str, accounts: &[&str]) -> &mut Self {
+        let fact = self.id("IntercompanySettlement", id);
+        let resolved = accounts
+            .iter()
+            .map(|name| {
+                self.facts()
+                    .accounts()
+                    .values()
+                    .find(|a| a.name == *name)
+                    .map(|a| a.id.clone())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{}: settlement_covers account `{name}` must exist before the schedule",
+                            self.name
+                        )
+                    })
+            })
+            .collect();
+        self.settings
+            .intercompany_settlement_schedules
+            .get_mut(&fact)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: settlement_covers `{id}` — call intercompany_settlement first",
+                    self.name
+                )
+            })
+            .accounts = resolved;
+        self
+    }
+
+    /// Confirm an intercompany account is not settling within the horizon (IC-LOAN-02).
+    pub fn intercompany_not_settling(&mut self, account: &str) -> &mut Self {
+        let id = self.account(account);
+        self.settings.intercompany_not_settling.insert(id);
         self
     }
 
@@ -677,10 +771,180 @@ impl Scenario {
             },
             start: self.date(start),
             end: end.map(|on| self.date(on)),
+            covers_account: None,
         };
         let key = self.id("ScheduledObligation", id);
         self.settings.scheduled_obligations.insert(key, obligation);
         self
+    }
+
+    /// Marks an owner-entered schedule as covering a loan or lease account (GAP-LOAN-01).
+    pub fn obligation_covers(&mut self, id: &str, account: &str) -> &mut Self {
+        let account = self.account(account);
+        let key = self.id("ScheduledObligation", id);
+        self.settings
+            .scheduled_obligations
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("{}: no scheduled obligation {id}", self.name))
+            .covers_account = Some(account);
+        self
+    }
+
+    /// Owner-entered payroll cadence (GAP-PAYROLL-01). `interval` is 1 for monthly/weekly and 2
+    /// for biweekly. `expected_remittance` is optional (Q119).
+    pub fn payroll_schedule(
+        &mut self,
+        every: FrequencyUnit,
+        interval: u32,
+        next_pay_date: &str,
+        expected_net_pay: &str,
+        expected_remittance: Option<&str>,
+        paid_through: Option<&str>,
+    ) -> &mut Self {
+        let entity = self.entity_id();
+        let paid_through = paid_through.map(|name| self.vendor(name));
+        self.settings.payroll_schedules.insert(
+            entity,
+            PayrollSchedule {
+                frequency: Frequency {
+                    unit: every,
+                    interval,
+                },
+                next_pay_date: self.date(next_pay_date),
+                expected_net_pay: HomeAmount(amount(expected_net_pay)),
+                expected_remittance: expected_remittance.map(|v| HomeAmount(amount(v))),
+                paid_through,
+            },
+        );
+        self
+    }
+
+    /// CRA remitter type (GAP-PAYROLL-04, ADR-0007).
+    pub fn remitter_type(&mut self, remitter: RemitterType) -> &mut Self {
+        let entity = self.entity_id();
+        self.settings.remitter_types.insert(entity, remitter);
+        self
+    }
+
+    /// Owner-confirmed sales tax reporting period (GAP-TAX-03).
+    pub fn sales_tax_period(&mut self, period: SalesTaxReportingPeriod) -> &mut Self {
+        let entity = self.entity_id();
+        self.settings.sales_tax_periods.insert(entity, period);
+        self
+    }
+
+    /// Jurisdiction of a sales-tax liability account (GAP-TAX-04); unset means Canada federal.
+    pub fn tax_jurisdiction(&mut self, account: &str, jurisdiction: Jurisdiction) -> &mut Self {
+        let id = self.account(account);
+        self.settings.tax_jurisdictions.insert(id, jurisdiction);
+        self
+    }
+
+    /// Corporate income tax timing (GAP-INCOME-01). `balance_due_extension` unset is Q160.
+    pub fn corporate_tax(
+        &mut self,
+        tax_year_start: &str,
+        monthly_instalment: Option<&str>,
+        balance_due_extension: Option<bool>,
+    ) -> &mut Self {
+        let entity = self.entity_id();
+        self.settings.corporate_tax.insert(
+            entity,
+            CorporateTax {
+                tax_year_start: self.date(tax_year_start),
+                monthly_instalment: monthly_instalment.map(|v| HomeAmount(amount(v))),
+                balance_due_extension,
+            },
+        );
+        self
+    }
+
+    /// Expected settlement for an accrued liability (GAP-ACCRUAL-01, Q120).
+    pub fn accrual_settlement(
+        &mut self,
+        account: &str,
+        settlement: AccrualSettlement,
+    ) -> &mut Self {
+        let id = self.account(account);
+        self.settings.accrual_settlements.insert(id, settlement);
+        self
+    }
+
+    /// Xero `SalesTaxPeriod` on the Entity's ledger settings (GAP-TAX-03, Q253).
+    pub fn ledger_sales_tax_period(&mut self, value: &str) -> &mut Self {
+        let entity = self.entity_id();
+        self.facts
+            .ledger_settings_mut(&entity)
+            .unwrap_or_else(|| panic!("{}: Entity has no ledger settings", self.name))
+            .sales_tax_period = Some(value.to_owned());
+        self
+    }
+
+    /// Xero `SalesTaxBasis` on the Entity's ledger settings (GAP-TAX-01, Q253).
+    pub fn ledger_sales_tax_basis(&mut self, basis: SalesTaxBasis) -> &mut Self {
+        let entity = self.entity_id();
+        self.facts
+            .ledger_settings_mut(&entity)
+            .unwrap_or_else(|| panic!("{}: Entity has no ledger settings", self.name))
+            .sales_tax_basis = Some(basis);
+        self
+    }
+
+    /// Lock date on the Entity's ledger settings (CASH-S03).
+    pub fn lock_date(&mut self, on: &str) -> &mut Self {
+        let entity = self.entity_id();
+        let on = self.date(on);
+        self.facts
+            .ledger_settings_mut(&entity)
+            .unwrap_or_else(|| panic!("{}: Entity has no ledger settings", self.name))
+            .lock_date = Some(on);
+        self
+    }
+
+    /// A payment marked as a tax remittance, with no payee (Q224): what GAP-TAX-01 and GAP-TAX-02
+    /// read as money already sent to the authority.
+    pub fn tax_remittance(
+        &mut self,
+        number: &str,
+        account: &str,
+        dated: &str,
+        total: &str,
+    ) -> &mut Self {
+        let payment = Payment {
+            id: self.id("Payment", number),
+            provenance: self.provenance(),
+            direction: Direction::Out,
+            purpose: PaymentPurpose::TaxAuthority { counterparty: None },
+            date: self.date(dated),
+            amount: Money::home(amount(total)),
+            account: self.account(account),
+            status: PostingStatus::Posted,
+        };
+        let result = self.facts.add_payment(payment);
+        self.accept(result);
+        self
+    }
+
+    /// Money leaving a bank or card account with no payee (a QBO purchase). GAP-SCHED-02 cannot
+    /// match it to an obligation, so the occurrence stays forecast.
+    pub fn spend_no_payee(&mut self, number: &str, account: &str, dated: &str, total: &str) {
+        let account = self.account(account);
+        let line = AccountLine {
+            id: self.id("AccountLine", number),
+            provenance: self.provenance(),
+            account,
+            date: self.date(dated),
+            amount: Money::home(-amount(total)),
+            counterparty: None,
+            source: Source {
+                record_type: "Expense".to_owned(),
+                id: number.to_owned(),
+            },
+            reconciliation: Reconciliation::Reconciled,
+            status: PostingStatus::Posted,
+        };
+        let result = self.facts.add_account_line(line);
+        self.accept(result);
     }
 
     /// The scheduled receipt entered under an id (CASH-SCHED-01).
@@ -731,6 +995,20 @@ impl Scenario {
             .documents()
             .values()
             .find(|d| d.number.as_deref() == Some(number))
+    }
+
+    /// The document with a number in one Entity (IC-S01: both sides of a pair can share a number).
+    pub fn document_numbered_in(&self, entity: &str, number: &str) -> Option<&Document> {
+        self.facts.documents().values().find(|d| {
+            d.number.as_deref() == Some(number)
+                && (d.id.entity.0 == entity
+                    || d.id
+                        .entity
+                        .0
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|short| short == entity))
+        })
     }
 
     pub fn counterparty_name(&self, id: &FactId) -> String {

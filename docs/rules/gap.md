@@ -1,10 +1,9 @@
 # GAP — Obligations that are not open bills
 
-Status: **approved by the owner** (2026-09-14). Two Rules belong to the CASH build, which writes
-them ahead of this Family in `core/src/gap.rs` because CASH-S01, CASH-S02 and CASH-S07 read them
-(Q275): GAP-CARD-01 and GAP-SCHED-01. They are declared by no test — `scenarios/tests/coverage.rs`
-reads a Family only once it has a `tests/<family>.rs`, and GAP has none — and their gate is
-`tools/mutate.py cash` over those Scenarios. Nothing else here is built.
+Status: **approved by the owner** (2026-09-14). Built: every Rule here is implemented in
+`core/src/gap.rs` and covered by a Scenario test, with coverage gated against the table in
+`docs/scenarios/gap.md` (`scenarios/tests/coverage.rs`). GAP-CARD-01 and GAP-SCHED-01 were
+written a Family early for CASH (Q275); this Family's tests now gate them too.
 
 What this Family does: forecasts the cash obligations that are not open bills: payroll, tax
 remittances and instalments, loan and lease payments, rent and subscriptions paid without a
@@ -29,7 +28,10 @@ never guessed (ADR-0019).
 
 Decided by the owner on 2026-09-13 and recorded in `docs/plans/design-session-2026-09-13.md`.
 Q224–Q228 were decided on 2026-09-16 from the UK pass (`docs/research/2026-09-16-sandbox-uk-pass.md`,
-cited `[uk: ...]`) and are recorded in `docs/plans/design-session-2026-09-16.md`.
+cited `[uk: ...]`) and are recorded in `docs/plans/design-session-2026-09-16.md`. Q285 (CRA
+remitter calendars complete in M1) was decided on 2026-09-23 after the model-quality Assessor
+found Regular-only Reference Data under-scoped ADR-0007; recorded in
+`docs/plans/design-session-2026-09-23.md`.
 
 | # | Question | Decision | Rules |
 |---|---|---|---|
@@ -45,13 +47,14 @@ cited `[uk: ...]`) and are recorded in `docs/plans/design-session-2026-09-16.md`
 | Q119 | Amount of an unbooked estimate | The owner-entered amount (Confidence firm), or else the last actual for a period of the same length (Confidence estimated). With neither, the obligation is excluded with an item and the run is Provisional. | GAP-TAX-02, GAP-PAYROLL-03 |
 | Q120 | Timing of accruals | An optional per-account Setting for expected settlement. Unset: excluded with an item, and the run is Provisional, because leaving it out understates outflows. | GAP-ACCRUAL-01 |
 | Q121 | Card payment amount | The card balance on the run date, paid on the card's payment day (Q85). The ledger holds no statement balance, and paying in full is the prudent assumption. | GAP-CARD-01 |
-| Q122 | Calendar coverage in M1 | Canada federal (CRA payroll remittances, GST/HST, corporate instalments) and US federal (IRS deposits, FUTA, corporate estimated tax), with each country's holiday list. Provinces and states use ADR-0007's "no calendar" path until added. | GAP-TAX-04 |
+| Q122 | Calendar coverage in M1 | Canada federal (CRA payroll remittances for every remitter type — Q285 — GST/HST, corporate instalments) and US federal (IRS deposits, FUTA, corporate estimated tax), with each country's holiday list. Provinces and states use ADR-0007's "no calendar" path until added. | GAP-TAX-04, GAP-PAYROLL-03 |
 | Q224 | Finding payments to the tax authority | QBO outside the US keeps VAT and GST/HST payments as their own record type (`TaxPayment`) with no payee. The Adapter reads them as payment facts marked as tax remittances, and Rules find payments to the authority by that mark, never by payee. | GAP-TAX-01, 02 |
 | Q225 | Where the sales-tax liability sits | In two QBO accounts: `GlobalTaxPayable` for the running period and `GlobalTaxSuspense` for a filed return not yet paid. Both are classified as sales-tax liability and read together. | GAP-TAX-01 |
-| Q226 | Tax accounting schemes | A Setting per Entity. Standard: the booked balance, Confidence firm. Any other scheme (cash accounting, flat rate, Canada's Quick Method), where the booked balance isn't the return: the last actual remittance for a period of the same length, Confidence estimated. Unset: the booked balance, Confidence estimated, with a "confirm" item; not Provisional. | GAP-TAX-01, 02 |
+| Q226 | Tax accounting schemes | A Setting per Entity. Standard: the booked balance, Confidence firm. Any other scheme (cash accounting, flat rate, Canada's Quick Method), where the booked balance isn't the return: the last actual remittance for a period of the same length, Confidence estimated. Unset with no ledger basis: the standard basis, Confidence firm, no confirm item (Q284 Pick A). Unset when the ledger holds a basis: Q253. Not Provisional. | GAP-TAX-01, 02 |
 | Q253 | A ledger-held tax basis | Xero's `SalesTaxBasis` prefills the tax accounting scheme with Confidence estimated and a "confirm" item, as `SalesTaxPeriod` prefills the period. Amends Q226 for Xero. | GAP-TAX-01, 02, 03 |
-| Q227 | Calendar shape | Each calendar carries its weekend and holiday direction (HMRC VAT moves earlier; CRA and IRS move later) and its period boundaries (UK PAYE tax months run 6th to 5th). | GAP-PAYROLL-03, GAP-TAX-01, 02, 04 |
+| Q227 | Calendar shape | Each calendar carries its weekend and holiday direction (HMRC VAT moves earlier; CRA and IRS move later) and its period boundaries (UK PAYE tax months run 6th to 5th; CRA Accelerated remitter periods end mid-month). | GAP-PAYROLL-03, GAP-TAX-01, 02, 04 |
 | Q228 | UK calendars | Not in M1. UK obligations take GAP-TAX-04's "no calendar" path; UK VAT and PAYE are the next jurisdiction to add. Q122 unchanged. | GAP-TAX-04 |
+| Q285 | CRA remitter calendars complete in M1 | Canada federal payroll Reference Data holds Regular, Accelerated threshold 1, Accelerated threshold 2, and Quarterly. Which applies is the remitter-type Setting. Amends Q122 and ADR-0007; see `docs/plans/design-session-2026-09-23.md`. | GAP-PAYROLL-03, 04 |
 | Q123 | What Provisional and "assumed" mean | A run is Provisional when evidence it needs is missing (an obligation excluded for want of a Setting, or a blocking check). Estimates from the Entity's own actuals are Confidence estimated and do not make a run Provisional; otherwise every forecast would be Provisional. Retire the "assumed" level, which nothing produces. Amends Q88, ADR-0020, CASH-CONF-01 and CASH-PROV-01. | all |
 
 ---
@@ -137,7 +140,7 @@ cited `[uk: ...]`) and are recorded in `docs/plans/design-session-2026-09-16.md`
 - **Acted on by:** owner.
 - **Marks Provisional:** yes.
 
-### GAP-PAYROLL-03 — Source deductions are remitted on the statutory calendar (Q112, Q119, Q227)
+### GAP-PAYROLL-03 — Source deductions are remitted on the statutory calendar (Q112, Q119, Q227, Q285)
 
 - **Scope:** Universal · **Status:** active
 - **Statement:** Each remittance due within the horizon is placed on its due date from the
@@ -154,7 +157,11 @@ cited `[uk: ...]`) and are recorded in `docs/plans/design-session-2026-09-16.md`
   Every remittance is marked as held in trust for a government.
 - **Justification:**
   - **Due dates are statutory,** set by remitter type in Canada and by deposit schedule in the
-    US `[gap: Part 1]`.
+    US `[gap: Part 1]`. Canada federal Reference Data holds Regular (month of pay, due the 15th
+    of the next month), Accelerated threshold 1 (1st–15th due the 25th; 16th–end due the 10th of
+    the next month), Accelerated threshold 2 (1–7 / 8–14 / 15–21 / 22–end, due the third working
+    day after each period end), and Quarterly (small employer; remittance due 15 April, 15 July,
+    15 October, 15 January) (Q285, ADR-0007).
   - **Booked balances cannot double-count** what has already been recorded `[gap: Part 7]`.
   - **Trust priority:** withheld amounts are held in trust, and directors can be personally
     liable for them `[ap: Part 2]`, so they rank first in the queue (AP-PRIORITY-01).
@@ -194,11 +201,12 @@ cited `[uk: ...]`) and are recorded in `docs/plans/design-session-2026-09-16.md`
   holidays in the direction that calendar sets (Q227), and marked as held in trust for a
   government. A refund position (a debit balance) is shown as an exclusion with an item, not a
   forecast receipt.
-  - **Tax accounting scheme (Q226):** this basis applies when the Entity's scheme is standard.
-    Under any other scheme the remittance is estimated as GAP-TAX-02 estimates it. With no scheme
-    set, the ledger's recorded basis is used if it has one (Xero `SalesTaxBasis`, Q253), otherwise
-    the standard basis; either way the remittance carries Confidence estimated, and a Decision Item
-    asks the accountant to confirm the scheme.
+  - **Tax accounting scheme (Q226, Q284):** this basis applies when the Entity's scheme is
+    standard. Under any other scheme the remittance is estimated as GAP-TAX-02 estimates it. With
+    no scheme set and no ledger basis, the standard basis applies, Confidence firm, and no
+    confirm item (Q284 Pick A — small-business default). With no scheme set but a ledger-held
+    basis (Xero `SalesTaxBasis`, Q253), that basis is used, Confidence estimated, and a Decision
+    Item asks the accountant to confirm the scheme.
 - **Justification:**
   - **Due dates:** GST/HST is due one month after a monthly or quarterly period, and three
     months after year-end for annual filers `[gap: Part 2]`. UK VAT is due one calendar month and
@@ -219,9 +227,10 @@ cited `[uk: ...]`) and are recorded in `docs/plans/design-session-2026-09-16.md`
   Classifications: sales-tax liability, government trust. Settings: reporting period, tax
   accounting scheme. Reference Data: sales tax calendars.
 - **Produces:** Placement per remittance, basis "booked tax liability", Confidence firm (estimated
-  when the scheme is unset), trust-marked; exclusion and Decision Item kind "sales tax refund
-  position" for a debit balance; Decision Item kind "confirm tax accounting scheme" when the
-  scheme is unset.
+  when the period or a ledger-held scheme is unconfirmed), trust-marked; exclusion and Decision
+  Item kind "sales tax refund position" for a debit balance; Decision Item kind "confirm tax
+  accounting scheme" when a ledger-held basis is used without an owner Setting (Q253), not when
+  both are blank (Q284).
 - **Acted on by:** accountant.
 - **Marks Provisional:** no.
 

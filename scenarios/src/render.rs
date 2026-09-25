@@ -5,16 +5,19 @@ use std::collections::BTreeSet;
 
 use cashsaas_core::facts::EntityId;
 use cashsaas_core::facts::{
-    Direction, Document, DocumentKind, DueRule, FactId, FrequencyUnit, PaymentTerms,
-    PurchaseOrderStatus, Side, TemplateMode,
+    Direction, Document, DocumentKind, DueRule, FactId, FrequencyUnit, PaymentPurpose,
+    PaymentTerms, PurchaseOrderStatus, Side, TemplateMode,
 };
 use cashsaas_core::forecast::{
     Basis, Confidence, DecisionItem, DraftCorrection, DuplicateMatch, Evidence, Exclusion,
     ForecastRun, GroupView, ItemKind, Outcome, Placement, Priority, Role, Severity, Stretch,
     Subject, Week,
 };
-use cashsaas_core::money::HomeAmount;
-use cashsaas_core::settings::{AccountClass, classify};
+use cashsaas_core::money::{HomeAmount, ReportingAmount};
+use cashsaas_core::reference::{Jurisdiction, jurisdiction_name, sales_tax_name};
+use cashsaas_core::settings::{
+    AccountClass, AccrualSettlement, CounterpartyClass, SalesTaxReportingPeriod, classify,
+};
 
 use cashsaas_core::{ar, document};
 use chrono::{Datelike, NaiveDate};
@@ -24,6 +27,16 @@ use crate::Scenario;
 use crate::tables::{Match, Table, compare, is_rule_id, section, tables, tokens};
 
 const NONE: &str = "—";
+
+fn ordinal_suffix(day: u32) -> &'static str {
+    match (day % 100, day % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    }
+}
 
 /// Whether any row of this column produced a value, which makes it a column the renderer derives.
 /// A row that then produced none is a fact the run does not hold, not commentary.
@@ -108,7 +121,17 @@ fn number(scenario: &Scenario, id: &FactId) -> String {
 fn subject(scenario: &Scenario, subject: &Subject) -> String {
     match subject {
         Subject::Fact(id) => number(scenario, id),
-        Subject::Occurrence { template, date: on } => {
+        Subject::Occurrence {
+            template, date: on, ..
+        } => {
+            // A schedule that covers a named loan/lease account is written as the account and
+            // date (GAP-S02), not `{id} occurrence {date}` (GAP-S01's O1–O4 form).
+            if let Some(obligation) = scenario.settings().scheduled_obligations.get(template)
+                && let Some(account) = obligation.covers_account.as_ref()
+                && let Some(name) = scenario.facts().accounts().get(account).map(|a| &a.name)
+            {
+                return format!("{} {}", name, date(scenario, *on));
+            }
             format!(
                 "{} occurrence {}",
                 number(scenario, template),
@@ -134,6 +157,187 @@ fn subject(scenario: &Scenario, subject: &Subject) -> String {
         // Both legs of a pair cite the receivable, so a reader sees they are the same
         // transaction (CASH-S09), whichever Entity's own leg this Placement is.
         Subject::Intercompany { document, .. } => number(scenario, document),
+        Subject::EntityPair { a, b, month } => {
+            let pair = format!("{} and {}", a.0, b.0);
+            match month {
+                Some(on) => format!("{}, {}", pair, on.format("%B %Y")),
+                None => pair,
+            }
+        }
+        Subject::PayrollPay { date: on, .. } => format!("Net pay {}", date(scenario, *on)),
+        Subject::PayrollRemittance {
+            pay_month,
+            period_end,
+            raw_due,
+            due,
+            runs,
+            ..
+        } => {
+            let month = pay_month.format("%B").to_string();
+            // Regular: one calendar month. Quarterly: named span across months. Accelerated:
+            // day-range labels (Q227 / Q285).
+            let mut text = if pay_month.month() != period_end.month()
+                || pay_month.year() != period_end.year()
+            {
+                format!("Remittance for {}–{}", month, period_end.format("%B"))
+            } else {
+                match (pay_month.day(), period_end.day()) {
+                    (1, 15) => format!("Remittance for 1–15 {month}"),
+                    (16, _) => format!("Remittance for 16–{} {month}", period_end.day()),
+                    (1, 7) => format!("Remittance for 1–7 {month}"),
+                    (8, 14) => format!("Remittance for 8–14 {month}"),
+                    (15, 21) => format!("Remittance for 15–21 {month}"),
+                    (22, _) => format!("Remittance for 22–{} {month}", period_end.day()),
+                    _ => format!("Remittance for {month}"),
+                }
+            };
+            if !runs.is_empty() {
+                let list = runs
+                    .iter()
+                    .map(|on| date(scenario, *on))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                text.push_str(&format!(" (runs {list})"));
+            }
+            if raw_due == due {
+                text.push_str(&format!(", due {}", date(scenario, *due)));
+            } else {
+                text.push_str(&format!(
+                    ", due {}, moved to {}",
+                    date(scenario, *raw_due),
+                    date(scenario, *due)
+                ));
+            }
+            text
+        }
+        Subject::SalesTaxRemittance { .. } => sales_tax_remittance(scenario, subject),
+        // The exclusion is about the account, so the document names it (GAP-S07's `PST Payable`).
+        Subject::SalesTaxAccount { account, .. } => number(scenario, account),
+        Subject::SalesTaxJurisdiction { jurisdiction, .. } => {
+            sales_tax_name(*jurisdiction).to_owned()
+        }
+        Subject::PayrollRemittances { .. } => "Source deduction remittances".to_owned(),
+        Subject::PayrollRemittancesUnknown { remittances, .. } => {
+            let parts: Vec<String> = remittances
+                .iter()
+                .map(|(month, due)| {
+                    format!("{} (due {})", month.format("%B"), date(scenario, *due))
+                })
+                .collect();
+            format!("Remittances for {}", parts.join(" and "))
+        }
+        Subject::CorporateInstalment { raw_due, due, .. } => {
+            if raw_due == due {
+                format!("Instalment due {}", date(scenario, *due))
+            } else {
+                format!(
+                    "Instalment due {}, moved to {}",
+                    date(scenario, *raw_due),
+                    date(scenario, *due)
+                )
+            }
+        }
+        Subject::CorporateBalanceDue {
+            year_end,
+            raw_due,
+            due,
+            ..
+        } => {
+            if raw_due == due {
+                format!(
+                    "Balance for year ended {}, due {}",
+                    date(scenario, *year_end),
+                    date(scenario, *due)
+                )
+            } else {
+                format!(
+                    "Balance for year ended {}, due {}, moved to {}",
+                    date(scenario, *year_end),
+                    date(scenario, *raw_due),
+                    date(scenario, *due)
+                )
+            }
+        }
+    }
+}
+
+/// The period a sales tax remittance covers, as the documents write it: `September` for a monthly
+/// period, `July to September` for a longer one.
+fn sales_tax_period_label(scenario: &Scenario, period: (NaiveDate, NaiveDate)) -> String {
+    let (start, end) = period;
+    if start.month() == end.month() && start.year() == end.year() {
+        return end.format("%B").to_string();
+    }
+    if end.year() == scenario.year() && start.year() == scenario.year() {
+        return format!("{} to {}", start.format("%B"), end.format("%B"));
+    }
+    format!("{} to {}", start.format("%B %Y"), end.format("%B %Y"))
+}
+
+/// `quarterly`, as a document names a reporting period's length.
+fn period_word(period: SalesTaxReportingPeriod) -> &'static str {
+    match period {
+        SalesTaxReportingPeriod::Monthly => "monthly",
+        SalesTaxReportingPeriod::Quarterly => "quarterly",
+        SalesTaxReportingPeriod::Annual => "annual",
+    }
+}
+
+/// Whether an Entity's sales tax has to be named to tell one obligation from another: with tax in
+/// more than one jurisdiction the period alone is ambiguous, so the document writes `GST/HST July
+/// to September` beside its PST (GAP-S07); with one jurisdiction the period stands alone (GAP-S06).
+fn names_its_tax(scenario: &Scenario, entity: &EntityId) -> bool {
+    let classifications = classify(scenario.facts(), scenario.settings());
+    let jurisdictions: BTreeSet<Jurisdiction> = classifications
+        .accounts_classed(entity, &AccountClass::SalesTaxLiability)
+        .map(|account| {
+            scenario
+                .settings()
+                .tax_jurisdictions
+                .get(account)
+                .copied()
+                .unwrap_or(Jurisdiction::CanadaFederal)
+        })
+        .collect();
+    jurisdictions.len() > 1
+}
+
+/// A sales tax remittance as its Scenario document writes it. A GAP document names the period and
+/// the due date, moved date included (`September, due 10-31, moved to 11-02`). A CASH document is
+/// previewing another Family's Placement, so its Inputs row names the tax, the statutory date and
+/// the trust mark that table has no column of its own for (CASH-S03).
+fn sales_tax_remittance(scenario: &Scenario, subject: &Subject) -> String {
+    let Subject::SalesTaxRemittance {
+        entity,
+        jurisdiction,
+        period,
+        raw_due,
+        due,
+    } = subject
+    else {
+        return NONE.to_owned();
+    };
+    let tax = sales_tax_name(*jurisdiction);
+    let label = sales_tax_period_label(scenario, *period);
+    if scenario.name.starts_with("CASH-") {
+        return format!(
+            "{tax} remittance for {label}, due {}, trust-marked",
+            date(scenario, *raw_due)
+        );
+    }
+    let named = if names_its_tax(scenario, entity) {
+        format!("{tax} {label}")
+    } else {
+        label
+    };
+    if raw_due == due {
+        format!("{named}, due {}", date(scenario, *due))
+    } else {
+        format!(
+            "{named}, due {}, moved to {}",
+            date(scenario, *raw_due),
+            date(scenario, *due)
+        )
     }
 }
 
@@ -159,11 +363,15 @@ fn priority(mark: Option<Priority>) -> String {
 
 /// What covered an occurrence, as the Scenario documents name it: a bill by its number, and a
 /// spend by what it is and the day it was recorded — `card charge 10-06`, `bank spend 10-02` —
-/// since an account line has no number a reader would recognise.
+/// since an account line has no number a reader would recognise. IC-LOAN-01's covering transfer is
+/// `transfer {date}` (IC-S02).
 fn covering(scenario: &Scenario, id: &FactId) -> String {
     let Some(line) = scenario.facts().account_lines().get(id) else {
         return number(scenario, id);
     };
+    if scenario.name.starts_with("IC-") {
+        return format!("transfer {}", date(scenario, line.date));
+    }
     let kind = match classify(scenario.facts(), scenario.settings())
         .account(&line.account)
         .class
@@ -174,7 +382,20 @@ fn covering(scenario: &Scenario, id: &FactId) -> String {
         _ if line.amount.home.0.is_sign_positive() && !line.amount.home.0.is_zero() => {
             "bank receipt"
         }
-        _ => "bank spend",
+        // A bank spend with a payee is named by that payee on GAP (S03: `Wagepoint spend 10-07`);
+        // AP keeps `bank spend` (AP-S09).
+        _ => {
+            if scenario.name.starts_with("GAP-")
+                && let Some(payee) = line.counterparty.as_ref()
+            {
+                return format!(
+                    "{} spend {}",
+                    scenario.counterparty_name(payee),
+                    date(scenario, line.date)
+                );
+            }
+            "bank spend"
+        }
     };
     format!("{kind} {}", date(scenario, line.date))
 }
@@ -199,6 +420,14 @@ fn basis(scenario: &Scenario, placement: &Placement, as_of: NaiveDate) -> String
             Basis::CardBalance => "card balance",
             Basis::ClearingBalance => "clearing balance",
             Basis::IntercompanyDocument => "intercompany document",
+            Basis::IntercompanySchedule => "intercompany schedule",
+            Basis::PayrollSchedule => "payroll schedule",
+            Basis::BookedLiability => "booked liability",
+            Basis::BookedTaxLiability => "booked tax liability",
+            Basis::LastRemittance => "last remittance",
+            Basis::Instalment => "instalment",
+            Basis::BalanceDue => "balance due",
+            Basis::Accrual => "accrual",
         }
         .to_owned(),
         Outcome::Excluded(reason) => match reason {
@@ -219,6 +448,18 @@ fn basis(scenario: &Scenario, placement: &Placement, as_of: NaiveDate) -> String
             Exclusion::Restricted => "restricted".to_owned(),
             Exclusion::CreditCardBalance => "credit card, see GAP".to_owned(),
             Exclusion::NoCardPaymentDay => "no payment day".to_owned(),
+            Exclusion::NoSchedule => "no schedule".to_owned(),
+            Exclusion::NoRemitterType => "no remitter type".to_owned(),
+            Exclusion::RemittanceAmountUnknown => "remittance amount unknown".to_owned(),
+            Exclusion::SalesTaxRefundPosition => "refund position".to_owned(),
+            Exclusion::NoSalesTaxPeriod => "no sales tax period".to_owned(),
+            Exclusion::SalesTaxEstimateUnavailable => "sales tax estimate unavailable".to_owned(),
+            Exclusion::NoCalendar => "no calendar".to_owned(),
+            Exclusion::NoExpectedSettlement => "no expected settlement".to_owned(),
+            Exclusion::NoSettlementSchedule => "no settlement schedule".to_owned(),
+            Exclusion::ConfirmedNotSettling => {
+                "confirmed not settling within the horizon".to_owned()
+            }
         },
     }
 }
@@ -288,26 +529,68 @@ fn placement_cell(
     placement: &Placement,
     header: &str,
     as_of: NaiveDate,
+    headers: &[String],
 ) -> String {
     match header {
         // A stated position is named by the Rule that states it, not by the word "Placement":
         // the CASH documents head its row `Opening Cash`.
-        "Output" => match placement.outcome {
-            Outcome::Stated { .. } if placement.rule.0 == "CASH-OPEN-01" => "Opening Cash",
-            Outcome::Stated { .. } => "Position",
-            Outcome::Placed { .. } => "Placement",
-            Outcome::Excluded(_) => "Exclusion",
-            Outcome::Shown => "Headroom",
+        "Output" => {
+            let kind = match placement.outcome {
+                Outcome::Stated { .. } if placement.rule.0 == "CASH-OPEN-01" => "Opening Cash",
+                Outcome::Stated { .. } => "Position",
+                Outcome::Placed { .. } => "Placement",
+                Outcome::Excluded(_) => "Exclusion",
+                Outcome::Shown => "Headroom",
+            };
+            // IC Expected tables name payment vs receipt on the Output cell (IC-S01+).
+            if scenario.name.starts_with("IC-")
+                && let Outcome::Placed { direction, .. } = placement.outcome
+            {
+                return match direction {
+                    Direction::Out => format!("{kind}, payment"),
+                    Direction::In => format!("{kind}, receipt"),
+                };
+            }
+            kind.to_owned()
         }
-        .to_owned(),
-        "Invoice" | "Bill" | "Item" | "Placement" => subject(scenario, &placement.subject),
-        "Entity" => placement
-            .subject
-            .entity()
-            .map_or(NONE.to_owned(), |e| e.0.clone()),
+        // An excluded remittance names only the period it covers (GAP-S06's refund position): the
+        // due date it would have had says nothing, and the Basis / reason cell carries the reason.
+        "Invoice" | "Bill" | "Item" | "Placement" | "Account" | "Document" => {
+            match (&placement.outcome, &placement.subject) {
+                (Outcome::Excluded(_), Subject::SalesTaxRemittance { period, .. }) => {
+                    sales_tax_period_label(scenario, *period)
+                }
+                _ => subject(scenario, &placement.subject),
+            }
+        }
+        "Entity" => match &placement.subject {
+            // IC-LOAN-01's covered occurrence is one Exclusion for the pair (IC-S02: Entity `both`).
+            Subject::Occurrence { template, .. }
+                if scenario
+                    .settings()
+                    .intercompany_settlement_schedules
+                    .contains_key(template)
+                    && matches!(placement.outcome, Outcome::Excluded(_)) =>
+            {
+                "both".to_owned()
+            }
+            _ => placement
+                .subject
+                .entity()
+                .map_or(NONE.to_owned(), |e| e.0.clone()),
+        },
         "Week" => week(scenario, placement),
         "Priority mark" => priority(placement.priority),
         "Amount" | "Amount (CAD)" => placement_amount(scenario, placement),
+        "Amount (Home Currency)" => {
+            let Some(value) = placement.amount else {
+                return NONE.to_owned();
+            };
+            placement
+                .subject
+                .entity()
+                .map_or_else(|| amount(value.0), |e| home_amount(scenario, e, value))
+        }
         "Basis / reason" | "Basis" => basis(scenario, placement, as_of),
         // Narrower than "Basis / reason": a column named just "Reason" states why a row is an
         // exclusion and nothing else (CASH-S07's Opening Cash row is "—", not its book balance).
@@ -315,24 +598,36 @@ fn placement_cell(
             Outcome::Excluded(_) => basis(scenario, placement, as_of),
             _ => NONE.to_owned(),
         },
-        "Confidence" => match placement.outcome {
-            Outcome::Placed {
-                confidence: Confidence::Firm,
-                ..
+        "Confidence" => {
+            let level = match placement.outcome {
+                Outcome::Placed {
+                    confidence: Confidence::Firm,
+                    ..
+                }
+                | Outcome::Stated {
+                    confidence: Confidence::Firm,
+                } => "firm",
+                Outcome::Placed {
+                    confidence: Confidence::Estimated,
+                    ..
+                }
+                | Outcome::Stated {
+                    confidence: Confidence::Estimated,
+                } => "estimated",
+                Outcome::Excluded(_) | Outcome::Shown => return NONE.to_owned(),
+            };
+            // GAP writes trust on the Confidence cell (`firm, trust`); AP keeps a separate
+            // Priority mark column, and CASH's Inputs-from-other-Families table leaves
+            // Confidence as the level alone even when the source Placement is trust-marked.
+            if placement.priority == Some(Priority::GovernmentTrust)
+                && placement.rule.family() == "GAP"
+                && !headers.iter().any(|h| h == "Priority mark")
+            {
+                format!("{level}, trust")
+            } else {
+                level.to_owned()
             }
-            | Outcome::Stated {
-                confidence: Confidence::Firm,
-            } => "firm",
-            Outcome::Placed {
-                confidence: Confidence::Estimated,
-                ..
-            }
-            | Outcome::Stated {
-                confidence: Confidence::Estimated,
-            } => "estimated",
-            Outcome::Excluded(_) | Outcome::Shown => NONE,
         }
-        .to_owned(),
         "Median" => placement
             .history
             .and_then(|h| h.median_days)
@@ -395,10 +690,33 @@ fn draft(scenario: &Scenario, draft: &DraftCorrection) -> String {
                 .collect();
             format!("Payment application: {}", parts.join(", "))
         }
+        DraftCorrection::MirrorDocument {
+            side,
+            counterparty,
+            reference,
+            dated,
+            due,
+            amount: value,
+        } => {
+            let kind = match side {
+                Side::Payable => "Bill",
+                Side::Receivable => "Invoice",
+            };
+            let from = scenario.counterparty_name(counterparty);
+            let mut text = format!(
+                "{kind} from {from}, reference {reference}, dated {}",
+                date(scenario, *dated)
+            );
+            if let Some(on) = due {
+                text.push_str(&format!(", due {}", date(scenario, *on)));
+            }
+            text.push_str(&format!(", {}", amount(value.0)));
+            text
+        }
     }
 }
 
-fn item_cell(scenario: &Scenario, item: &DecisionItem, header: &str) -> String {
+fn item_cell(scenario: &Scenario, run: &ForecastRun, item: &DecisionItem, header: &str) -> String {
     match header {
         "Decision Item" => {
             let kind = match item.kind {
@@ -425,8 +743,26 @@ fn item_cell(scenario: &Scenario, item: &DecisionItem, header: &str) -> String {
                 ItemKind::BelowBuffer => "below buffer",
                 ItemKind::SetConversionRate => "set conversion rate",
                 ItemKind::SetCardPaymentDay => "set card payment day",
+                ItemKind::EnterLoanSchedule => "enter loan schedule",
                 ItemKind::MapCreditLineAccount => "map credit line account",
                 ItemKind::ConsiderIntercompanyFunding => "consider intercompany funding",
+                ItemKind::NameIntercompanyCounterparty => "name intercompany counterparty",
+                ItemKind::ConnectIntercompanyCounterparty => "connect intercompany counterparty",
+                ItemKind::CounterpartyHasNotBooked => "counterparty has not booked",
+                ItemKind::IntercompanySettlementPlan => "intercompany settlement plan",
+                ItemKind::IntercompanyBalancesDisagree => "intercompany balances disagree",
+                ItemKind::IntercompanyCurrencyDifference => "intercompany currency difference",
+                ItemKind::SetUpPayrollSchedule => "set up payroll schedule",
+                ItemKind::SetRemitterType => "set remitter type",
+                ItemKind::PayrollRemittanceAmountUnknown => "payroll remittance amount unknown",
+                ItemKind::SalesTaxRefundPosition => "sales tax refund position",
+                ItemKind::ConfirmTaxAccountingScheme => "confirm tax accounting scheme",
+                ItemKind::SalesTaxEstimateUnavailable => "sales tax estimate unavailable",
+                ItemKind::ConfirmSalesTaxPeriod => "confirm sales tax period",
+                ItemKind::SetSalesTaxPeriod => "set sales tax period",
+                ItemKind::UnsupportedTaxJurisdiction => "unsupported tax jurisdiction",
+                ItemKind::ConfirmIncomeTaxBalanceDueDate => "confirm income tax balance-due date",
+                ItemKind::WhenWillAccrualBePaid => "when will this accrual be paid",
             };
             match item.evidence {
                 Some(Evidence::ExpectedDatePassed(on)) => {
@@ -438,22 +774,110 @@ fn item_cell(scenario: &Scenario, item: &DecisionItem, header: &str) -> String {
                 _ => kind.to_owned(),
             }
         }
-        // The document writes an item's occurrence `T2, occurrence 10-01`, an output's `T1
-        // occurrence 10-15`.
-        "Subject" => match &item.subject {
-            Subject::Occurrence { template, date: on } => format!(
+        "Subject" => match (&item.kind, &item.subject) {
+            // IC-FUND-01: linked to the shortfall item (IC-S07: `Birch Hill's cash shortfall`).
+            (ItemKind::ConsiderIntercompanyFunding, Subject::Entity(id)) => {
+                format!("{}'s cash shortfall", id.0)
+            }
+            // IC-MAP-01: the document names the contact, not a bare provider id (IC-S03).
+            (ItemKind::NameIntercompanyCounterparty, Subject::Fact(id)) => {
+                format!("contact {}", scenario.counterparty_name(id))
+            }
+            // IC-ONESIDED-01: the contact that names the unconnected Entity (IC-S03).
+            (ItemKind::ConnectIntercompanyCounterparty, Subject::Fact(id)) => {
+                scenario.counterparty_name(id)
+            }
+            // IC-LOAN-02: the balance label and its magnitude (IC-S02: `Due to Birch Hill, 8,000.00`).
+            (ItemKind::IntercompanySettlementPlan, Subject::Fact(id)) => {
+                let magnitude = run
+                    .placements
+                    .iter()
+                    .find(|p| {
+                        matches!(&p.subject, Subject::Fact(f) if f == id)
+                            && matches!(
+                                p.outcome,
+                                Outcome::Excluded(Exclusion::NoSettlementSchedule)
+                            )
+                    })
+                    .and_then(|p| p.amount)
+                    .map(|a| amount(a.0.abs()));
+                match magnitude {
+                    Some(a) => format!("{}, {a}", number(scenario, id)),
+                    None => number(scenario, id),
+                }
+            }
+            (
+                _,
+                Subject::Occurrence {
+                    template, date: on, ..
+                },
+            ) => format!(
                 "{}, occurrence {}",
                 number(scenario, template),
                 date(scenario, *on)
             ),
-            other => subject(scenario, other),
+            (
+                _,
+                Subject::PayrollRemittancesUnknown {
+                    entity,
+                    remittances,
+                },
+            ) => {
+                let dues = remittances
+                    .iter()
+                    .map(|(_, due)| date(scenario, *due))
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                format!("{}, remittances due {dues}", entity.0)
+            }
+            (
+                _,
+                Subject::SalesTaxRemittance {
+                    jurisdiction,
+                    period,
+                    ..
+                },
+            ) => format!(
+                "{}, {}",
+                sales_tax_name(*jurisdiction),
+                sales_tax_period_label(scenario, *period)
+            ),
+            (_, Subject::SalesTaxJurisdiction { jurisdiction, .. }) => {
+                let tax = sales_tax_name(*jurisdiction);
+                match (item.kind, &item.evidence) {
+                    (ItemKind::UnsupportedTaxJurisdiction, _) => {
+                        format!("{} {tax}", jurisdiction_name(*jurisdiction))
+                    }
+                    (
+                        ItemKind::ConfirmSalesTaxPeriod,
+                        Some(Evidence::LedgerSalesTaxPeriod(period)),
+                    ) => format!("{tax}, {} from the ledger", period_word(*period)),
+                    _ => tax.to_owned(),
+                }
+            }
+            (_, Subject::CorporateBalanceDue { year_end, .. }) => {
+                format!("Year ended {}", date(scenario, *year_end))
+            }
+            (_, other) => subject(scenario, other),
         },
         // The queue is per Entity (Q155), so a multi-Entity Scenario heads each row with the
-        // Entity whose queue it is.
-        "Entity" => item
-            .subject
-            .entity()
-            .map_or(NONE.to_owned(), |entity| entity.0.clone()),
+        // Entity whose queue it is. Q161's pair item names both Entities and "(one item)".
+        "Entity" => match (&item.kind, &item.subject) {
+            (ItemKind::IntercompanySettlementPlan, Subject::Fact(id)) => {
+                let sister = match classify(scenario.facts(), scenario.settings())
+                    .account(id)
+                    .class
+                {
+                    AccountClass::Intercompany(Some(entity)) => entity.0,
+                    _ => return NONE.to_owned(),
+                };
+                format!("{} and {sister} (one item)", id.entity.0)
+            }
+            (_, Subject::EntityPair { a, b, .. }) => format!("{} and {} (one item)", a.0, b.0),
+            (_, other) => other
+                .entity()
+                .map_or(NONE.to_owned(), |entity| entity.0.clone()),
+        },
         "Class" => match item.severity {
             Severity::Critical => "critical",
             Severity::Blocking => "blocking",
@@ -527,6 +951,9 @@ fn item_cell(scenario: &Scenario, item: &DecisionItem, header: &str) -> String {
             Some(Evidence::MaybePaid) => {
                 "same vendor and amount, on or after the bill date".to_owned()
             }
+            Some(Evidence::LedgerSalesTaxPeriod(period)) => {
+                format!("{} from the ledger", period_word(*period))
+            }
             Some(Evidence::CashStretches {
                 buffer,
                 stretches,
@@ -534,12 +961,69 @@ fn item_cell(scenario: &Scenario, item: &DecisionItem, header: &str) -> String {
                 trust_present,
                 headroom,
             }) => cash_stretches(
-                scenario,
                 *buffer,
                 stretches,
                 *trust_capable,
                 *trust_present,
                 *headroom,
+            ),
+            Some(Evidence::IntercompanyFunding { helpers }) => {
+                let list = helpers
+                    .iter()
+                    .map(|h| {
+                        format!(
+                            "{} could transfer {} in W{}",
+                            h.entity.0,
+                            amount(h.amount.0),
+                            h.week.0
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!(
+                    "{list}. Caveats: characterise it as a loan, distribution or capital \
+                     contribution; a loan needs documented terms, and arm's-length interest may \
+                     apply; a distribution must pass the lender's solvency test; \
+                     shareholder-loan rules can tax a loan to an individual owner; lender \
+                     covenants may restrict it."
+                )
+            }
+            Some(Evidence::IntercompanyBalanceDisagreement {
+                a,
+                a_amount,
+                a_owed_to_it,
+                b,
+                b_amount,
+                difference,
+            }) => {
+                let a_side = if *a_owed_to_it { "owed to it" } else { "owed" };
+                format!(
+                    "{} {} {}; {} {} owed; difference {}",
+                    a.0,
+                    amount(a_amount.0),
+                    a_side,
+                    b.0,
+                    amount(b_amount.0),
+                    amount(difference.0)
+                )
+            }
+            Some(Evidence::IntercompanyCurrencyMovement {
+                foreign_entity,
+                foreign_amount,
+                converted,
+                home_entity,
+                home_amount,
+                difference,
+            }) => format!(
+                "{} {} {} at {:.4} = {}; {} {}; difference {}; currency movement is expected",
+                foreign_entity.0,
+                foreign_amount.currency.code(),
+                amount(foreign_amount.amount),
+                foreign_amount.rate,
+                amount(converted.0),
+                home_entity.0,
+                amount(home_amount.0),
+                amount(difference.0)
             ),
             None => NONE.to_owned(),
         },
@@ -590,9 +1074,12 @@ fn fact_cell(
     key: &str,
     header: &str,
     entity: Option<&str>,
+    as_of: Option<NaiveDate>,
 ) -> Option<String> {
     let facts = scenario.facts();
-    let document: Option<&Document> = scenario.document_numbered(key);
+    let document: Option<&Document> = entity
+        .and_then(|e| scenario.document_numbered_in(e, key))
+        .or_else(|| scenario.document_numbered(key));
     let payment = scenario.payment(key);
     let template = scenario.scheduled_template(key);
     let order = scenario.purchase_order_numbered(key);
@@ -602,12 +1089,17 @@ fn fact_cell(
     let account = entity
         .and_then(|e| scenario.account_named_in(e, key))
         .or_else(|| scenario.account_named(key));
+    // When the table names As of, pick that day's balance (IC-S02 lists 09-30 and 10-07); otherwise
+    // the latest, as CASH's single-date balance tables do.
     let balance = account.and_then(|a| {
-        facts
+        let balances = facts
             .account_balances()
             .values()
-            .filter(|b| b.account == a.id)
-            .max_by_key(|b| b.as_of)
+            .filter(|b| b.account == a.id);
+        match as_of {
+            Some(on) => balances.clone().find(|b| b.as_of == on),
+            None => balances.max_by_key(|b| b.as_of),
+        }
     });
     let id = document.map(|d| &d.id).or(payment.map(|p| &p.id));
     let counterparty = document
@@ -633,16 +1125,26 @@ fn fact_cell(
             key.to_owned()
         }
         // The account a transaction is posted to; in a balance table the account is the key.
-        "Account" => match line {
-            Some(l) => facts.accounts().get(&l.account).map(|a| a.name.clone())?,
-            None => key.to_owned(),
+        "Account" => match (line, payment) {
+            (Some(l), _) => facts.accounts().get(&l.account).map(|a| a.name.clone())?,
+            (_, Some(p)) => facts.accounts().get(&p.account).map(|a| a.name.clone())?,
+            _ => key.to_owned(),
         },
         // `Payer` is a receipt's counterparty, `Payee` a payment's; both name the contact.
         "Payee" | "Payer" => scenario.counterparty_name(counterparty?),
         "Receipt" | "Obligation" => key.to_owned(),
-        "End date" => scheduled?
-            .end
-            .map_or(NONE.to_owned(), |on| date(scenario, on)),
+        "End date" => {
+            if let Some(obligation) = obligation {
+                return Some(
+                    obligation
+                        .end
+                        .map_or("none".to_owned(), |on| date(scenario, on)),
+                );
+            }
+            scheduled?
+                .end
+                .map_or(NONE.to_owned(), |on| date(scenario, on))
+        }
         // A CASH facts table holds both sides at once, so the column is neither.
         "Customer" | "Vendor" | "Counterparty" => scenario.counterparty_name(counterparty?),
         "Discount date" => {
@@ -674,26 +1176,60 @@ fn fact_cell(
             .and_then(|c| c.payable_terms.as_ref())
             .and_then(|t| facts.payment_terms().get(t))
             .map_or(NONE.to_owned(), terms),
-        "Classification" => match classify(facts, scenario.settings())
-            .account(&account?.id)
-            .class
-        {
-            AccountClass::ArControl => "AR control",
-            AccountClass::UnbilledReceivable => "unbilled receivable",
-            AccountClass::BadDebtWriteOff => "bad-debt write-off",
-            AccountClass::ApControl => "AP control",
-            AccountClass::Bank => "bank",
-            AccountClass::CreditCard => "credit card",
-            AccountClass::Restricted => "restricted",
-            AccountClass::Clearing => "clearing",
-            AccountClass::CreditLine => "credit line",
-            AccountClass::Unclassified => "unclassified",
+        "Classification" => {
+            // Account rows use AccountClass; document/payment rows use the contact's
+            // CounterpartyClass (IC-S03 names the counterparty Entity, or none).
+            if let Some(account) = account {
+                match classify(facts, scenario.settings())
+                    .account(&account.id)
+                    .class
+                {
+                    AccountClass::ArControl => "AR control".to_owned(),
+                    AccountClass::UnbilledReceivable => "unbilled receivable".to_owned(),
+                    AccountClass::BadDebtWriteOff => "bad-debt write-off".to_owned(),
+                    AccountClass::ApControl => "AP control".to_owned(),
+                    AccountClass::Bank => "bank".to_owned(),
+                    AccountClass::CreditCard => "credit card".to_owned(),
+                    AccountClass::Restricted => "restricted".to_owned(),
+                    AccountClass::Clearing => "clearing".to_owned(),
+                    AccountClass::CreditLine => "credit line".to_owned(),
+                    AccountClass::PayrollLiability => "payroll liability".to_owned(),
+                    AccountClass::Wages => "wages".to_owned(),
+                    AccountClass::SalesTaxLiability => "sales-tax liability".to_owned(),
+                    AccountClass::AccruedLiabilities => "accrued liabilities".to_owned(),
+                    AccountClass::IncomeTaxPayable => "income tax payable".to_owned(),
+                    AccountClass::Loan => "loan".to_owned(),
+                    AccountClass::LeaseLiability => "lease liability".to_owned(),
+                    AccountClass::Intercompany(Some(entity)) => {
+                        format!("intercompany, {}", entity.0)
+                    }
+                    AccountClass::Intercompany(None) => {
+                        "intercompany, no counterparty named".to_owned()
+                    }
+                    AccountClass::Unclassified => "unclassified".to_owned(),
+                }
+            } else {
+                match classify(facts, scenario.settings())
+                    .counterparty(counterparty?)
+                    .class
+                {
+                    CounterpartyClass::Intercompany(None) => {
+                        "intercompany, no counterparty named".to_owned()
+                    }
+                    CounterpartyClass::Intercompany(Some(entity)) => {
+                        format!("intercompany, names {}", entity.0)
+                    }
+                    CounterpartyClass::GovernmentTrust => "government trust".to_owned(),
+                    CounterpartyClass::Unclassified => "unclassified".to_owned(),
+                }
+            }
         }
-        .to_owned(),
         // A multi-Entity facts table names the Entity a row belongs to, and its Home Currency,
         // which is the Entity's own Setting rather than anything about the account or document.
         "Entity" => document
             .map(|d| &d.id.entity)
+            .or(payment.map(|p| &p.id.entity))
+            .or(line.map(|l| &l.id.entity))
             .or(account.map(|a| &a.id.entity))?
             .0
             .clone(),
@@ -702,6 +1238,8 @@ fn fact_cell(
             .get(
                 document
                     .map(|d| &d.id.entity)
+                    .or(payment.map(|p| &p.id.entity))
+                    .or(line.map(|l| &l.id.entity))
                     .or(account.map(|a| &a.id.entity))?,
             )?
             .home_currency
@@ -716,8 +1254,23 @@ fn fact_cell(
                 .map(|(_, limit)| limit.0)?,
         ),
         "As of" => date(scenario, balance?.as_of),
-        "Balance" => amount(balance?.amount.home.0),
+        "Balance" => {
+            let value = balance?.amount.home.0;
+            let class = account.map(|a| classify(facts, scenario.settings()).account(&a.id).class);
+            // GAP writes card balances as owed magnitudes (GAP-S02); CASH keeps the signed figure.
+            match class {
+                Some(AccountClass::CreditCard) if scenario.name.starts_with("GAP-") => {
+                    format!("{} owed", amount(value.abs()))
+                }
+                _ => amount(value),
+            }
+        }
         "Kind" => match (payment, document) {
+            // The mark Rules find a remittance by (Q224), which is what the fact states: a QBO
+            // `TaxPayment` has no payee to recognise it from.
+            (Some(p), _) if matches!(p.purpose, PaymentPurpose::TaxAuthority { .. }) => {
+                "tax remittance"
+            }
             (Some(p), _) if p.direction == Direction::Out => "prepayment paid",
             (Some(_), _) => "overpayment received",
             (None, Some(d)) if d.kind == DocumentKind::CreditNote => match d.side {
@@ -747,18 +1300,24 @@ fn fact_cell(
                 .map(|t| t.amount.home.0)
                 .or_else(|| scheduled.map(|r| r.amount.0))
                 .or_else(|| obligation.map(|o| o.amount.0))
-                .or_else(|| line.map(|l| l.amount.home.0.abs()))?,
+                .or_else(|| line.map(|l| l.amount.home.0.abs()))
+                .or_else(|| payment.map(|p| p.amount.home.0.abs()))?,
         ),
-        "Every" => {
+        "Every" | "Frequency" => {
             let f = template
                 .map(|t| t.frequency)
                 .or(scheduled.map(|r| r.frequency))
                 .or(obligation.map(|o| o.frequency))?;
-            let unit = match f.unit {
-                FrequencyUnit::Day => "day",
-                FrequencyUnit::Week => "week",
-                FrequencyUnit::Month => "month",
-                FrequencyUnit::Year => "year",
+            let unit = match (header, f.unit) {
+                // GAP-S01's obligation table writes the adverb form; CASH's "Every" keeps the noun.
+                ("Frequency", FrequencyUnit::Day) => "daily",
+                ("Frequency", FrequencyUnit::Week) => "weekly",
+                ("Frequency", FrequencyUnit::Month) => "monthly",
+                ("Frequency", FrequencyUnit::Year) => "yearly",
+                (_, FrequencyUnit::Day) => "day",
+                (_, FrequencyUnit::Week) => "week",
+                (_, FrequencyUnit::Month) => "month",
+                (_, FrequencyUnit::Year) => "year",
             };
             if f.interval == 1 {
                 unit.to_owned()
@@ -766,13 +1325,98 @@ fn fact_cell(
                 format!("{} {unit}s", f.interval)
             }
         }
-        "Starting" => date(
+        "Starting" | "Next date" => date(
             scenario,
             template
                 .map(|t| t.start)
                 .or(scheduled.map(|r| r.start))
                 .or(obligation.map(|o| o.start))?,
         ),
+        "Settings" => {
+            let account = account?;
+            let class = classify(facts, scenario.settings())
+                .account(&account.id)
+                .class;
+            match class {
+                AccountClass::CreditCard => {
+                    match scenario.settings().card_payment_days.get(&account.id) {
+                        Some(day) => format!("card payment day the {day}{}", ordinal_suffix(*day)),
+                        None => "no card payment day".to_owned(),
+                    }
+                }
+                AccountClass::Loan | AccountClass::LeaseLiability => {
+                    match scenario
+                        .settings()
+                        .scheduled_obligations
+                        .values()
+                        .find(|o| o.covers_account.as_ref() == Some(&account.id))
+                    {
+                        Some(o) => {
+                            let payee = scenario.counterparty_name(&o.payee);
+                            let unit = match o.frequency.unit {
+                                FrequencyUnit::Day => "daily",
+                                FrequencyUnit::Week => "weekly",
+                                FrequencyUnit::Month => "monthly",
+                                FrequencyUnit::Year => "yearly",
+                            };
+                            format!(
+                                "scheduled obligation: {payee}, {} {unit}, next {}, for this account",
+                                amount(o.amount.0),
+                                date(scenario, o.start)
+                            )
+                        }
+                        None => "no scheduled obligation".to_owned(),
+                    }
+                }
+                AccountClass::Intercompany(Some(_)) => {
+                    if scenario
+                        .settings()
+                        .intercompany_not_settling
+                        .contains(&account.id)
+                    {
+                        "confirmed not settling within the horizon".to_owned()
+                    } else {
+                        match scenario
+                            .settings()
+                            .intercompany_settlement_schedules
+                            .iter()
+                            .find(|(_, s)| s.accounts.iter().any(|a| a == &account.id))
+                        {
+                            Some((id, s)) => {
+                                let unit = match s.frequency.unit {
+                                    FrequencyUnit::Day => "daily",
+                                    FrequencyUnit::Week => "weekly",
+                                    FrequencyUnit::Month => "monthly",
+                                    FrequencyUnit::Year => "yearly",
+                                };
+                                format!(
+                                    "settlement schedule {}: {} pays {} {} {}, next date {}",
+                                    number(scenario, id),
+                                    s.owing.0,
+                                    s.owed.0,
+                                    amount(s.amount.0),
+                                    unit,
+                                    date(scenario, s.start)
+                                )
+                            }
+                            None => "none".to_owned(),
+                        }
+                    }
+                }
+                AccountClass::Intercompany(None) => "none".to_owned(),
+                _ => return None,
+            }
+        }
+        "Settings: expected settlement" => {
+            let account = account?;
+            match scenario.settings().accrual_settlements.get(&account.id) {
+                Some(AccrualSettlement::DaysAfterMonthEnd(n)) => {
+                    format!("{n} days after month-end")
+                }
+                Some(AccrualSettlement::OnDate(on)) => date(scenario, *on),
+                None => "none".to_owned(),
+            }
+        }
         "Due rule" => due_rule(template?.due_rule, template?.side),
         "Currency" => document?
             .total
@@ -844,16 +1488,28 @@ fn fact_cell(
     Some(cell)
 }
 
-/// What a facts table's row is about, which is its first cell — unless that names the Entity and
-/// an `Account` column names the account the row states a balance for (CASH-S09, CASH-S10).
+/// What a facts table's row is about. With `Entity` first, the identifying column is a document
+/// or payment number when present (GAP-S06's tax remittance table), otherwise the `Account`
+/// (CASH-S09 balances). Without a leading Entity, it is the first cell.
 fn row_key(table: &Table, row: &[String]) -> String {
-    let account = table
-        .column("Account")
-        .filter(|_| table.headers.first().is_some_and(|h| h == "Entity"));
-    match account.and_then(|column| row.get(column)) {
-        Some(cell) => cell.clone(),
-        None => row.first().cloned().unwrap_or_default(),
+    if table.headers.first().is_some_and(|h| h == "Entity") {
+        for col in [
+            "Transaction",
+            "Bill",
+            "Invoice",
+            "Document",
+            "Purchase order",
+            "Item",
+            "Account",
+        ] {
+            if let Some(column) = table.column(col)
+                && let Some(cell) = row.get(column)
+            {
+                return cell.clone();
+            }
+        }
     }
+    row.first().cloned().unwrap_or_default()
 }
 
 fn how_placements(header: &str) -> Match {
@@ -874,8 +1530,18 @@ fn how_items(header: &str) -> Match {
     match header {
         "Rules" => Match::Rules,
         // The documents name an Entity in a table by its short name — `Cascade` for Cascade
-        // Garden Supply Inc. — where every other cell is the run's own words.
-        "Entity" => Match::Loose,
+        // Garden Supply Inc. — where every other cell is the run's own words. Subject and
+        // Evidence on Q161 pair items do the same (IC-S04: `Maple Ridge and Birch Hill`).
+        "Entity" | "Subject" | "Evidence" => Match::Loose,
+        _ => Match::Exact,
+    }
+}
+
+fn how_group_lines(header: &str) -> Match {
+    match header {
+        "Rules" => Match::Rules,
+        // Working names Entities by short name; the run uses full legal names (IC-S06).
+        "Working" => Match::Loose,
         _ => Match::Exact,
     }
 }
@@ -891,7 +1557,10 @@ fn render_placements(scenario: &Scenario, run: &ForecastRun, headers: &[String])
             .map(|p| {
                 headers
                     .iter()
-                    .map(|h| placement_cell(scenario, p, h, run.as_of))
+                    .map(|h| match h.as_str() {
+                        "Pair" => pair_label(run, p),
+                        other => placement_cell(scenario, p, other, run.as_of, headers),
+                    })
                     .collect()
             })
             .collect(),
@@ -936,7 +1605,7 @@ fn render_other_families(scenario: &Scenario, run: &ForecastRun, headers: &[Stri
                                 _ => subject,
                             }
                         }
-                        other => placement_cell(scenario, p, other, run.as_of),
+                        other => placement_cell(scenario, p, other, run.as_of, headers),
                     })
                     .collect()
             })
@@ -944,23 +1613,75 @@ fn render_other_families(scenario: &Scenario, run: &ForecastRun, headers: &[Stri
     }
 }
 
-/// `P1`, `P2`: a stable label for an intercompany pair (IC-DOC-01), by the order its shared
-/// receivable first appears among this run's Placements — so both legs of a pair carry the same
-/// label (CASH-S09).
+/// `P1`, `P2`: a stable label for a paired intercompany Placement — by shared document
+/// (IC-DOC-01) or by schedule occurrence (IC-LOAN-01) — so both legs carry the same label
+/// (CASH-S09, IC-S02). A Placement with only one leg is `unpaired` (IC-MAP-01 / IC-ONESIDED-01).
 fn pair_label(run: &ForecastRun, placement: &Placement) -> String {
-    let Subject::Intercompany { document, .. } = &placement.subject else {
-        return NONE.to_owned();
-    };
-    let mut seen: Vec<&FactId> = Vec::new();
-    for p in &run.placements {
-        if let Subject::Intercompany { document: d, .. } = &p.subject
-            && !seen.contains(&d)
-        {
-            seen.push(d);
+    match &placement.subject {
+        Subject::Intercompany { document, .. } => {
+            let mut counts: std::collections::BTreeMap<&FactId, usize> =
+                std::collections::BTreeMap::new();
+            for p in &run.placements {
+                if let Subject::Intercompany { document: d, .. } = &p.subject
+                    && matches!(p.outcome, Outcome::Placed { .. })
+                {
+                    *counts.entry(d).or_insert(0) += 1;
+                }
+            }
+            if counts.get(document).copied().unwrap_or(0) != 2 {
+                return "unpaired".to_owned();
+            }
+            let mut seen: Vec<&FactId> = Vec::new();
+            for p in &run.placements {
+                if let Subject::Intercompany { document: d, .. } = &p.subject
+                    && counts.get(d).copied() == Some(2)
+                    && !seen.contains(&d)
+                {
+                    seen.push(d);
+                }
+            }
+            let index = seen.iter().position(|d| *d == document).unwrap_or(0);
+            format!("P{}", index + 1)
         }
+        Subject::Occurrence {
+            template, date: on, ..
+        } => {
+            let key = (template, *on);
+            let mut counts: std::collections::BTreeMap<(&FactId, chrono::NaiveDate), usize> =
+                std::collections::BTreeMap::new();
+            for p in &run.placements {
+                if let Subject::Occurrence {
+                    template: t,
+                    date: d,
+                    ..
+                } = &p.subject
+                    && matches!(p.outcome, Outcome::Placed { .. })
+                    && p.rule.family() == "IC"
+                {
+                    *counts.entry((t, *d)).or_insert(0) += 1;
+                }
+            }
+            if counts.get(&key).copied().unwrap_or(0) != 2 {
+                return NONE.to_owned();
+            }
+            let mut seen: Vec<(&FactId, chrono::NaiveDate)> = Vec::new();
+            for p in &run.placements {
+                if let Subject::Occurrence {
+                    template: t,
+                    date: d,
+                    ..
+                } = &p.subject
+                    && counts.get(&(t, *d)).copied() == Some(2)
+                    && !seen.contains(&(t, *d))
+                {
+                    seen.push((t, *d));
+                }
+            }
+            let index = seen.iter().position(|k| *k == key).unwrap_or(0);
+            format!("P{}", index + 1)
+        }
+        _ => NONE.to_owned(),
     }
-    let index = seen.iter().position(|d| *d == document).unwrap_or(0);
-    format!("P{}", index + 1)
 }
 
 /// `+7,000.00` for money in, `−9,500.00` for money out (CASH-ROLL-01's direction, Conventions),
@@ -1009,7 +1730,12 @@ fn render_items(scenario: &Scenario, run: &ForecastRun, headers: &[String]) -> T
             .decision_items
             .iter()
             .filter(|i| i.rule.family() == family)
-            .map(|i| headers.iter().map(|h| item_cell(scenario, i, h)).collect())
+            .map(|i| {
+                headers
+                    .iter()
+                    .map(|h| item_cell(scenario, run, i, h))
+                    .collect()
+            })
             .collect(),
     }
 }
@@ -1153,7 +1879,7 @@ fn render_group(scenario: &Scenario, run: &ForecastRun, headers: &[String]) -> T
                         subject(scenario, &p.subject),
                         basis(scenario, p, run.as_of)
                     ),
-                    other => placement_cell(scenario, p, other, run.as_of),
+                    other => placement_cell(scenario, p, other, run.as_of, headers),
                 })
                 .collect()
         })
@@ -1190,11 +1916,21 @@ fn signed_reporting(value: Decimal) -> String {
 
 /// Which pair (`pair_label`'s own numbering) placed a leg in this week, in this direction — the
 /// label the Group's Receipts or Payments cell shows in place of a figure once IC-ELIM-01 has
-/// taken every paired leg out of both (CASH-S09: `— (P1 eliminated)`).
+/// taken every paired leg out of both (CASH-S09: `— (P1 eliminated)`). Unpaired legs are not
+/// eliminated and do not appear here.
 fn eliminated_pairs(run: &ForecastRun, week: Week, direction: Direction) -> Vec<String> {
+    let mut counts: std::collections::BTreeMap<&FactId, usize> = std::collections::BTreeMap::new();
+    for p in &run.placements {
+        if let Subject::Intercompany { document, .. } = &p.subject
+            && matches!(p.outcome, Outcome::Placed { .. })
+        {
+            *counts.entry(document).or_insert(0) += 1;
+        }
+    }
     let mut seen: Vec<&FactId> = Vec::new();
     for p in &run.placements {
         if let Subject::Intercompany { document, .. } = &p.subject
+            && counts.get(document).copied() == Some(2)
             && !seen.contains(&document)
         {
             seen.push(document);
@@ -1215,6 +1951,142 @@ fn eliminated_pairs(run: &ForecastRun, week: Week, direction: Direction) -> Vec<
     }
     labels
 }
+
+/// IC-S06's Group-view line table: one row per paired document whose residual in a week is not
+/// zero (IC-ELIM-01). The weekly aggregate lives on `GroupWeek::intercompany_difference`; this
+/// table names each pair and the Working that produced its residual.
+fn render_group_currency_lines(
+    scenario: &Scenario,
+    run: &ForecastRun,
+    headers: &[String],
+) -> Table {
+    let facts = scenario.facts();
+    let settings = scenario.settings();
+    let Some(reporting) = settings.reporting_currency else {
+        return Table {
+            headers: headers.to_vec(),
+            rows: Vec::new(),
+        };
+    };
+    let rate_of = |entity: &EntityId| -> Option<Decimal> {
+        let home = facts.ledger_settings().get(entity)?.home_currency;
+        if home == reporting {
+            Some(Decimal::ONE)
+        } else {
+            settings.conversion_rates.get(&(home, reporting)).copied()
+        }
+    };
+
+    let mut counts: std::collections::BTreeMap<&FactId, usize> = std::collections::BTreeMap::new();
+    for p in &run.placements {
+        if let Subject::Intercompany { document, .. } = &p.subject
+            && matches!(p.outcome, Outcome::Placed { .. })
+        {
+            *counts.entry(document).or_insert(0) += 1;
+        }
+    }
+    let mut seen: Vec<&FactId> = Vec::new();
+    for p in &run.placements {
+        if let Subject::Intercompany { document, .. } = &p.subject
+            && counts.get(document).copied() == Some(2)
+            && !seen.contains(&document)
+        {
+            seen.push(document);
+        }
+    }
+
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for (index, document) in seen.iter().enumerate() {
+        let legs: Vec<&Placement> = run
+            .placements
+            .iter()
+            .filter(|p| {
+                matches!(&p.subject, Subject::Intercompany { document: d, .. } if d == *document)
+                    && matches!(p.outcome, Outcome::Placed { .. })
+            })
+            .collect();
+        let Some(week) = legs.iter().find_map(|p| match p.outcome {
+            Outcome::Placed { week, .. } => Some(week),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let mut residual = ReportingAmount::ZERO;
+        let mut working_parts: Vec<String> = Vec::new();
+        // Receipt first, then payment — the document's Working order (IC-S06).
+        let mut ordered = legs;
+        ordered.sort_by_key(|p| match p.outcome {
+            Outcome::Placed {
+                direction: Direction::In,
+                ..
+            } => 0,
+            _ => 1,
+        });
+        for p in ordered {
+            let Outcome::Placed { direction, .. } = p.outcome else {
+                continue;
+            };
+            let Some(entity) = p.subject.entity() else {
+                continue;
+            };
+            let Some(rate) = rate_of(entity) else {
+                continue;
+            };
+            let Some(value) = p.amount else {
+                continue;
+            };
+            let signed = match direction {
+                Direction::In => ReportingAmount::convert(value, rate),
+                Direction::Out => ReportingAmount::convert(HomeAmount(-value.0), rate),
+            };
+            residual = residual.saturating_add(signed);
+            let verb = match direction {
+                Direction::In => "receives",
+                Direction::Out => "pays",
+            };
+            let home = facts.ledger_settings().get(entity).map(|l| l.home_currency);
+            let part = if home == Some(reporting) {
+                format!("{} {verb} {}", entity.0, amount(value.0.abs()))
+            } else {
+                // Group rate converts Home Currency (IC-ELIM-01); the booked foreign amount is
+                // Recorded on Placement, not this Working.
+                format!(
+                    "{} {verb} {} × {:.4} = {}",
+                    entity.0,
+                    amount(value.0.abs()),
+                    rate,
+                    amount(ReportingAmount::convert(HomeAmount(value.0.abs()), rate).amount())
+                )
+            };
+            working_parts.push(part);
+        }
+        if residual.amount().is_zero() {
+            continue;
+        }
+        let pair = format!("P{}", index + 1);
+        rows.push(
+            headers
+                .iter()
+                .map(|h| match h.as_str() {
+                    "Group-view line" => {
+                        format!("intercompany currency difference, {pair}")
+                    }
+                    "Week" => format!("W{}", week.0),
+                    "Amount (CAD)" | "Amount" => signed_reporting(residual.amount()),
+                    "Working" => working_parts.join("; "),
+                    "Rules" => IC_ELIM_01_LABEL.to_owned(),
+                    other => format!("? {other}"),
+                })
+                .collect(),
+        );
+    }
+    Table {
+        headers: headers.to_vec(),
+        rows,
+    }
+}
+
+const IC_ELIM_01_LABEL: &str = "IC-ELIM-01";
 
 /// CASH-GROUP-01's weekly totals, with IC-ELIM-01's own shape: a week with a paired leg names the
 /// pair eliminated instead of a raw Receipts or Payments figure, and the residual, when there is
@@ -1319,7 +2191,6 @@ fn stretch_clause(stretch: &Stretch) -> String {
 /// trust obligation is relevant to this Entity at all, the clauses read as short sentences; when
 /// one is, the whole evidence is one sentence naming, for each stretch, whether it falls inside.
 fn cash_stretches(
-    scenario: &Scenario,
     buffer: Option<HomeAmount>,
     stretches: &[Stretch],
     trust_capable: bool,
@@ -1345,7 +2216,7 @@ fn cash_stretches(
                     stretch
                         .trust
                         .iter()
-                        .map(|id| number(scenario, id))
+                        .map(|t| { format!("{} {} (W{})", t.label, amount(t.amount.0), t.week.0) })
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -1401,7 +2272,7 @@ fn item_amounts(run: &ForecastRun, subject: &Subject, low: Option<Week>) -> (Dec
 /// it — a trust or marked-vendor priority, or the cash it concerns against the Low Point week.
 fn why_here(scenario: &Scenario, run: &ForecastRun, item: &DecisionItem) -> String {
     if matches!(item.evidence, Some(Evidence::CashStretches { .. })) {
-        return item_cell(scenario, item, "Evidence");
+        return item_cell(scenario, run, item, "Evidence");
     }
     match item.priority {
         Some(Priority::GovernmentTrust) => "held in trust for a government".to_owned(),
@@ -1460,9 +2331,9 @@ fn render_queue(scenario: &Scenario, run: &ForecastRun, headers: &[String]) -> T
                     .map(|h| match h.as_str() {
                         "#" => (at + 1).to_string(),
                         "Why here" => why_here(scenario, run, item),
-                        "Rules" => format!("{}, CASH-ORDER-01", item_cell(scenario, item, h)),
+                        "Rules" => format!("{}, CASH-ORDER-01", item_cell(scenario, run, item, h)),
                         "Subject" if names_amount => {
-                            let base = item_cell(scenario, item, h);
+                            let base = item_cell(scenario, run, item, h);
                             let total = subject_amount(run, &item.subject);
                             if total.is_zero() {
                                 base
@@ -1470,7 +2341,7 @@ fn render_queue(scenario: &Scenario, run: &ForecastRun, headers: &[String]) -> T
                                 format!("{base} ({})", amount(total))
                             }
                         }
-                        other => item_cell(scenario, item, other),
+                        other => item_cell(scenario, run, item, other),
                     })
                     .collect()
             })
@@ -1536,10 +2407,14 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
                     .column("Entity")
                     .and_then(|c| row.get(c))
                     .map(String::as_str);
+                let as_of = table
+                    .column("As of")
+                    .and_then(|c| row.get(c))
+                    .map(|cell| scenario.date(cell));
                 table
                     .headers
                     .iter()
-                    .map(|h| fact_cell(scenario, run, &key, h, entity))
+                    .map(|h| fact_cell(scenario, run, &key, h, entity, as_of))
                     .collect()
             })
             .collect();
@@ -1613,6 +2488,24 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
                         how_items,
                     )
                 }
+                // Multi-Entity GAP tables head with Entity (S04, S05); CASH-S09's entity table
+                // is Opening Cash and is handled below.
+                Some("Entity") if has("Output") => {
+                    saw_outputs = true;
+                    (
+                        "outputs",
+                        render_placements(scenario, run, &table.headers),
+                        how_placements,
+                    )
+                }
+                Some("Entity") if has("Decision Item") && !has("#") => {
+                    saw_items = true;
+                    (
+                        "Decision Items",
+                        render_items(scenario, run, &table.headers),
+                        how_items,
+                    )
+                }
                 Some("Entity") if has("Opening Cash") => {
                     saw_outputs = true;
                     (
@@ -1629,6 +2522,15 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
                         "the Group's weeks",
                         render_group_weeks(run, &table.headers),
                         how_items,
+                    )
+                }
+                // IC-S06 names each pair's residual as its own Group-view line, with Working.
+                Some("Group-view line") => {
+                    saw_outputs = true;
+                    (
+                        "the Group-view lines",
+                        render_group_currency_lines(scenario, run, &table.headers),
+                        how_group_lines,
                     )
                 }
                 Some("Week") => ("the weeks", render_weeks(run, &table.headers), how_items),
@@ -1716,6 +2618,11 @@ pub fn check(scenario: &Scenario, run: &ForecastRun, doc: &str, declared: &[&str
             // Provisional state and the list of reasons, which the section's Provisional line has
             // already been compared against.
             || (rule == "CASH-PROV-01" && run.is_provisional())
+            // IC-AGREE-01's negative path (IC-S02): agreement holds, so no item; the section's
+            // own note is the gate that the Rule ran and found nothing to raise.
+            || (rule == "IC-AGREE-01"
+                && section.contains("IC-AGREE-01 raises nothing")
+                && !run.is_provisional())
     };
     let uncited: Vec<&&str> = declared.iter().filter(|r| !cited_by_run(r)).collect();
     assert!(

@@ -9,5 +9,6 @@ pub mod forecast;
 pub mod gap;
 pub mod ic;
 pub mod money;
+pub mod reference;
 pub mod schedule;
 pub mod settings;
